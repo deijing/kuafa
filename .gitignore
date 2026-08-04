@@ -12,6 +12,32 @@ dist
 dist-ssr
 *.local
 
+backend/.venv
+backend/.env
+backend/**/__pycache__/
+backend/**/*.py[cod]
+backend/.pytest_cache/
+backend/data/uploads/
+backend/data/thumbs/
+backend/data/outputs/
+backend/data/work/
+backend/data/covers/
+backend/data/bgm/*.mp3
+backend/data/bgm/*.wav
+backend/data/bgm/*.m4a
+backend/data/transcripts/
+backend/data/config.json
+backend/data/secrets.json
+backend/data/kuafa.db
+backend/data/kuafa.db-*
+# keep input/ folder; ignore video binaries inside
+backend/data/input/**/*.mp4
+backend/data/input/**/*.mov
+backend/data/input/**/*.mkv
+backend/data/input/**/*.webm
+backend/data/input/**/*.m4v
+backend/data/intput/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

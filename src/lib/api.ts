@@ -1,0 +1,323 @@
+export type DurationPreference = "short" | "mid" | "long"
+
+export type Material = {
+  id: string
+  group_id: string
+  group_name: string
+  filename: string
+  title: string
+  path: string
+  duration: number
+  duration_label: string
+  width: number | null
+  height: number | null
+  size_bytes: number
+  thumb_url: string | null
+  source: "library"
+}
+
+export type MaterialGroup = {
+  id: string
+  name: string
+  path: string
+  material_count: number
+  materials: Material[]
+}
+
+export type LibrarySettings = {
+  materials_dir: string
+  default_materials_dir: string
+  is_custom: boolean
+}
+
+export type JobStatus = "queued" | "running" | "succeeded" | "failed"
+
+export type Job = {
+  id: string
+  status: JobStatus
+  progress: number
+  message: string
+  created_at: string
+  finished_at: string | null
+  output_url: string | null
+  output_path: string | null
+  duration: number | null
+  material_ids: string[]
+  group_id: string | null
+  error: string | null
+}
+
+export type BgmItem = {
+  filename: string
+  url: string
+  size_bytes: number
+}
+
+export type GeneratePayload = {
+  material_ids: string[]
+  group_id?: string | null
+  duration_preference: DurationPreference
+  add_captions: boolean
+  add_sfx: boolean
+  add_subtitles?: boolean
+  add_bgm?: boolean
+  bgm_volume?: number
+  bgm_file?: string | null
+  title?: string
+  mode?: "sell" | "highlight"
+  extract_rules?: Record<string, boolean>
+  variant_index?: number
+}
+
+export type BatchGeneratePayload = {
+  group_id: string
+  count: number
+  material_ids?: string[]
+  duration_preference: DurationPreference
+  add_captions: boolean
+  add_sfx: boolean
+  add_subtitles?: boolean
+  add_bgm?: boolean
+  bgm_volume?: number
+  bgm_file?: string | null
+  title?: string | null
+  mode?: "sell" | "highlight"
+  extract_rules?: Record<string, boolean>
+}
+
+export type BatchGenerateResult = {
+  jobs: Job[]
+}
+
+export type CoverStyle = "yellow-red" | "black-yellow" | "red-white"
+
+export type CoverResult = {
+  id: string
+  url: string
+  remote_url: string | null
+}
+
+export type CoverJob = {
+  id: string
+  status: JobStatus
+  progress: number
+  message: string
+  created_at: string
+  finished_at: string | null
+  headline: string
+  style: string
+  count: number
+  results: CoverResult[]
+  error: string | null
+}
+
+export type CoverPayload = {
+  headline: string
+  style: CoverStyle
+  count?: number
+  mode?: "ai" | "template"
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init)
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const body = await res.json()
+      detail = body.detail ?? JSON.stringify(body)
+    } catch {
+      /* ignore */
+    }
+    throw new Error(typeof detail === "string" ? detail : "请求失败")
+  }
+  return res.json() as Promise<T>
+}
+
+export function fetchGroups() {
+  return request<MaterialGroup[]>("/api/groups")
+}
+
+export function createGroup(name: string) {
+  return request<MaterialGroup>("/api/groups", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function renameGroup(groupId: string, name: string) {
+  return request<MaterialGroup>(`/api/groups/${groupId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function fetchLibrarySettings() {
+  return request<LibrarySettings>("/api/settings/library")
+}
+
+export function updateLibrarySettings(materialsDir: string) {
+  return request<LibrarySettings>("/api/settings/library", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ materials_dir: materialsDir }),
+  })
+}
+
+export function resetLibrarySettings() {
+  return request<LibrarySettings>("/api/settings/library/reset", {
+    method: "POST",
+  })
+}
+
+export function fetchMaterials() {
+  return request<Material[]>("/api/materials")
+}
+
+export function getMaterialVideoUrl(id: string): string {
+  return `/api/materials/${id}/video`
+}
+
+export function createGenerateJob(payload: GeneratePayload) {
+  return request<Job>("/api/jobs/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function createBatchJobs(payload: BatchGeneratePayload) {
+  return request<BatchGenerateResult>("/api/jobs/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function fetchJob(jobId: string) {
+  return request<Job>(`/api/jobs/${jobId}`)
+}
+
+export function fetchJobs() {
+  return request<Job[]>("/api/jobs")
+}
+
+export function deleteJob(jobId: string) {
+  return request<Job>(`/api/jobs/${jobId}`, { method: "DELETE" })
+}
+
+export async function uploadMaterial(file: File, groupId: string) {
+  const form = new FormData()
+  form.append("file", file)
+  form.append("group_id", groupId)
+  return request<Material>("/api/materials/upload", {
+    method: "POST",
+    body: form,
+  })
+}
+
+export function createCoverJob(payload: CoverPayload) {
+  return request<CoverJob>("/api/covers/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function fetchCoverJob(jobId: string) {
+  return request<CoverJob>(`/api/covers/jobs/${jobId}`)
+}
+
+export function fetchCoverJobs() {
+  return request<CoverJob[]>("/api/covers/jobs")
+}
+
+export type ApiSecrets = {
+  catsapi_key_set: boolean
+  catsapi_key_masked: string | null
+  catsapi_base: string
+  openai_api_key_set: boolean
+  openai_api_key_masked: string | null
+  openai_base_url: string
+  openai_model: string
+  openai_reasoning_effort: ReasoningEffort
+}
+
+export type ReasoningEffort =
+  | "none"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+
+export type UpdateApiSecretsPayload = {
+  catsapi_key?: string | null
+  catsapi_base?: string | null
+  openai_api_key?: string | null
+  openai_base_url?: string | null
+  openai_model?: string | null
+  openai_reasoning_effort?: ReasoningEffort | null
+}
+
+export function fetchApiSecrets() {
+  return request<ApiSecrets>("/api/settings/secrets")
+}
+
+export function updateApiSecrets(payload: UpdateApiSecretsPayload) {
+  return request<ApiSecrets>("/api/settings/secrets", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export type OpenAIProbePayload = {
+  api_key?: string | null
+  base_url?: string | null
+  model?: string | null
+  reasoning_effort?: ReasoningEffort | null
+}
+
+export type OpenAIModelsResult = {
+  models: string[]
+}
+
+export type OpenAITestResult = {
+  ok: boolean
+  message: string
+  model: string | null
+  latency_ms: number | null
+  reply_preview: string | null
+  reasoning_effort?: ReasoningEffort | null
+}
+
+export function fetchOpenAIModels(payload: OpenAIProbePayload) {
+  return request<OpenAIModelsResult>("/api/settings/openai/models", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function testOpenAIConnection(payload: OpenAIProbePayload) {
+  return request<OpenAITestResult>("/api/settings/openai/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function fetchBgmFiles() {
+  return request<BgmItem[]>("/api/bgm")
+}
+
+export async function uploadBgm(file: File) {
+  const form = new FormData()
+  form.append("file", file)
+  return request<BgmItem>("/api/bgm/upload", {
+    method: "POST",
+    body: form,
+  })
+}
