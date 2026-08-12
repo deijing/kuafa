@@ -1,0 +1,200 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react"
+
+import {
+  playNotificationSound,
+  requestNotificationPermission,
+  sendDesktopNotification,
+} from "@/lib/notify"
+
+export type NotificationItem = {
+  id: string
+  title: string
+  message: string
+  type: "success" | "error" | "info"
+  timestamp: number
+  read: boolean
+  actionUrl?: string
+}
+
+export type ToastItem = {
+  id: string
+  title: string
+  message: string
+  type: "success" | "error" | "info"
+}
+
+type NotificationContextValue = {
+  notifications: NotificationItem[]
+  toasts: ToastItem[]
+  unreadCount: number
+  permission: NotificationPermission
+  requestPermission: () => Promise<NotificationPermission>
+  notify: (opts: {
+    title: string
+    message: string
+    type?: "success" | "error" | "info"
+    playSound?: boolean
+    sendDesktop?: boolean
+    actionUrl?: string
+  }) => void
+  dismissToast: (id: string) => void
+  markAllAsRead: () => void
+  clearAll: () => void
+}
+
+const STORAGE_KEY = "kuafa_notifications_v1"
+
+const NotificationContext = createContext<NotificationContextValue | null>(null)
+
+export function NotificationProvider({ children }: { children: ReactNode }) {
+  const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
+    if (typeof window === "undefined") return []
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      return saved ? (JSON.parse(saved) as NotificationItem[]) : []
+    } catch {
+      return []
+    }
+  })
+
+  const [toasts, setToasts] = useState<ToastItem[]>([])
+
+  const [permission, setPermission] = useState<NotificationPermission>(() => {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      return Notification.permission
+    }
+    return "denied"
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(notifications.slice(0, 50)))
+    } catch {
+      /* ignore storage errors */
+    }
+  }, [notifications])
+
+  const requestPerm = useCallback(async () => {
+    const res = await requestNotificationPermission()
+    setPermission(res)
+    return res
+  }, [])
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id))
+  }, [])
+
+  const notify = useCallback(
+    ({
+      title,
+      message,
+      type = "success",
+      playSound = true,
+      sendDesktop = true,
+      actionUrl,
+    }: {
+      title: string
+      message: string
+      type?: "success" | "error" | "info"
+      playSound?: boolean
+      sendDesktop?: boolean
+      actionUrl?: string
+    }) => {
+      const id = `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`
+      const newItem: NotificationItem = {
+        id,
+        title,
+        message,
+        type,
+        timestamp: Date.now(),
+        read: false,
+        actionUrl,
+      }
+
+      // 1. Append to notification list
+      setNotifications((prev) => [newItem, ...prev])
+
+      // 2. Add floating UI Toast
+      const toastId = `toast_${id}`
+      setToasts((prev) => [...prev, { id: toastId, title, message, type }])
+
+      // Auto dismiss toast after 4.5 seconds
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== toastId))
+      }, 4500)
+
+      // 3. Audio Chime
+      if (playSound) {
+        playNotificationSound(type === "error" ? "error" : "success")
+      }
+
+      // 4. Desktop Notification (especially if tab is hidden/minimized)
+      if (sendDesktop) {
+        sendDesktopNotification(title, {
+          body: message,
+        })
+      }
+    },
+    []
+  )
+
+  const markAllAsRead = useCallback(() => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+  }, [])
+
+  const clearAll = useCallback(() => {
+    setNotifications([])
+  }, [])
+
+  const unreadCount = useMemo(
+    () => notifications.filter((n) => !n.read).length,
+    [notifications]
+  )
+
+  const value = useMemo(
+    () => ({
+      notifications,
+      toasts,
+      unreadCount,
+      permission,
+      requestPermission: requestPerm,
+      notify,
+      dismissToast,
+      markAllAsRead,
+      clearAll,
+    }),
+    [
+      notifications,
+      toasts,
+      unreadCount,
+      permission,
+      requestPerm,
+      notify,
+      dismissToast,
+      markAllAsRead,
+      clearAll,
+    ]
+  )
+
+  return (
+    <NotificationContext.Provider value={value}>
+      {children}
+    </NotificationContext.Provider>
+  )
+}
+
+export function useNotifications() {
+  const context = useContext(NotificationContext)
+  if (!context) {
+    throw new Error("useNotifications must be used within a NotificationProvider")
+  }
+  return context
+}

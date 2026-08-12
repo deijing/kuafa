@@ -17,6 +17,8 @@ from app.models import (
     BatchGenerateOut,
     BatchGenerateRequest,
     CreateGroupRequest,
+    CatsAPIProbeRequest,
+    CatsAPITestOut,
     CoverJobOut,
     CoverRequest,
     GenerateRequest,
@@ -31,6 +33,7 @@ from app.models import (
     UpdateApiSecretsRequest,
     UpdateLibrarySettingsRequest,
 )
+from app.services import catsapi
 from app.services.covers import cover_jobs
 from app.services.jobs import jobs
 from app.services.materials import (
@@ -76,12 +79,15 @@ app.mount(
 )
 
 
+ALLOWED_BGM_EXTENSIONS = (".mp3", ".mp4", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".mov", ".mkv", ".webm")
+
+
 @app.get("/api/bgm")
 def list_bgm_files() -> list[dict[str, object]]:
     settings.bgm_dir.mkdir(parents=True, exist_ok=True)
     results = []
     for p in sorted(settings.bgm_dir.glob("*")):
-        if p.suffix.lower() in (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"):
+        if p.suffix.lower() in ALLOWED_BGM_EXTENSIONS:
             results.append({
                 "filename": p.name,
                 "url": f"/api/bgm/{p.name}",
@@ -95,8 +101,8 @@ async def upload_bgm_file(file: UploadFile = File(...)) -> dict[str, object]:
     if not file.filename:
         raise HTTPException(400, "缺少文件名")
     ext = Path(file.filename).suffix.lower()
-    if ext not in (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"):
-        raise HTTPException(400, "仅支持 mp3, wav, m4a, aac 等音频格式")
+    if ext not in ALLOWED_BGM_EXTENSIONS:
+        raise HTTPException(400, "仅支持 mp3, mp4, wav, m4a, aac 等音视频格式")
     data = await file.read()
     if not data:
         raise HTTPException(400, "空音频文件")
@@ -339,3 +345,13 @@ def openai_test_connection(req: OpenAIProbeRequest) -> OpenAITestOut:
         reasoning_effort=req.reasoning_effort,
     )
     return OpenAITestOut(**result)
+
+
+@app.post("/api/settings/catsapi/test", response_model=CatsAPITestOut)
+def catsapi_test_connection(req: CatsAPIProbeRequest) -> CatsAPITestOut:
+    """测试 CatsAPI 封面生图接口密钥连通性。"""
+    result = catsapi.test_connection(
+        api_key=req.api_key,
+        base_url=req.base_url,
+    )
+    return CatsAPITestOut(**result)

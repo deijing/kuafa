@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { useMaterials } from "@/hooks/use-materials"
+import { useNotifications } from "@/hooks/use-notifications"
 import {
   createGenerateJob,
   fetchJob,
@@ -75,6 +76,8 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const { notify } = useNotifications()
+
   useEffect(() => {
     if (!job || (job.status !== "queued" && job.status !== "running")) {
       return
@@ -85,6 +88,19 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
           setJob(next)
           if (next.status === "succeeded" || next.status === "failed") {
             setBusy(false)
+            if (next.status === "succeeded") {
+              notify({
+                title: "智能成片完成",
+                message: "单切片合成已完成，可以在右侧窗口直接预览及下载！",
+                type: "success",
+              })
+            } else {
+              notify({
+                title: "智能成片失败",
+                message: next.error || "视频渲染遇到异常，请检查配置后重试",
+                type: "error",
+              })
+            }
           }
         })
         .catch(() => {
@@ -92,7 +108,7 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
         })
     }, 800)
     return () => window.clearInterval(timer)
-  }, [job])
+  }, [job, notify])
 
   async function handleBgmUpload(file: File) {
     setUploadingBgm(true)
@@ -261,7 +277,7 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
                         <input
                           type="file"
                           ref={bgmFileInputRef}
-                          accept="audio/*,.mp3,.wav,.m4a,.aac"
+                          accept="audio/*,video/*,.mp3,.mp4,.wav,.m4a,.aac,.flac,.ogg"
                           className="hidden"
                           onChange={(e) => {
                             const file = e.target.files?.[0]

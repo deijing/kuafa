@@ -101,6 +101,9 @@ class CoverStyle(str, Enum):
     yellow_red = "yellow-red"
     black_yellow = "black-yellow"
     red_white = "red-white"
+    neon_cyber = "neon-cyber"
+    clean_minimal = "clean-minimal"
+    festive_gold = "festive-gold"
 
 
 class CoverRequest(BaseModel):
@@ -172,6 +175,17 @@ class OpenAITestOut(BaseModel):
     latency_ms: int | None = None
     reply_preview: str | None = None
     reasoning_effort: str | None = None
+
+
+class CatsAPIProbeRequest(BaseModel):
+    api_key: str | None = None
+    base_url: str | None = None
+
+
+class CatsAPITestOut(BaseModel):
+    ok: bool
+    message: str
+    latency_ms: int | None = None
 
 
 class JobOut(BaseModel):

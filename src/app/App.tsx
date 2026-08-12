@@ -8,7 +8,9 @@ import { DashboardView } from "@/components/views/DashboardView"
 import { GeneratorView } from "@/components/views/GeneratorView"
 import { HistoryView } from "@/components/views/HistoryView"
 import { LibraryView } from "@/components/views/LibraryView"
+import { ToastContainer } from "@/components/layout/ToastContainer"
 import { MaterialsProvider } from "@/hooks/use-materials"
+import { NotificationProvider } from "@/hooks/use-notifications"
 import { PATH_TO_TAB, TAB_PATHS, TAB_TITLES } from "@/types/nav"
 
 export function App() {
@@ -17,8 +19,10 @@ export function App() {
   const activeTab = PATH_TO_TAB[location.pathname] ?? "dashboard"
 
   return (
-    <MaterialsProvider>
-      <div className="flex h-screen overflow-hidden bg-background">
+    <NotificationProvider>
+      <MaterialsProvider>
+        <div className="flex h-screen overflow-hidden bg-background">
+          <ToastContainer />
         <AppSidebar />
         <main className="relative flex h-full flex-1 flex-col overflow-hidden bg-background">
           <AppHeader title={TAB_TITLES[activeTab]} />
@@ -67,6 +71,7 @@ export function App() {
         </main>
       </div>
     </MaterialsProvider>
+    </NotificationProvider>
   )
 }
 

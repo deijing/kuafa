@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import {
   CheckCircle2,
   CircleAlert,
+  ExternalLink,
   ImageIcon,
   RefreshCw,
   Settings,
@@ -45,9 +46,11 @@ import { cn } from "@/lib/utils"
 import {
   fetchApiSecrets,
   fetchOpenAIModels,
+  testCatsAPIConnection,
   testOpenAIConnection,
   updateApiSecrets,
   type ApiSecrets,
+  type CatsAPITestResult,
   type OpenAITestResult,
   type ReasoningEffort,
 } from "@/lib/api"
@@ -100,6 +103,8 @@ export function SettingsDialog() {
   const [fetchingModels, setFetchingModels] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<OpenAITestResult | null>(null)
+  const [testingCatsapi, setTestingCatsapi] = useState(false)
+  const [catsapiTestResult, setCatsapiTestResult] = useState<CatsAPITestResult | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -107,6 +112,7 @@ export function SettingsDialog() {
     setError(null)
     setOk(null)
     setTestResult(null)
+    setCatsapiTestResult(null)
     setModelOptions([])
     setModelsFetched(false)
     setCatsapiKey("")
@@ -124,6 +130,13 @@ export function SettingsDialog() {
       })
       .finally(() => setLoading(false))
   }, [open])
+
+  function catsapiProbePayload() {
+    return {
+      api_key: catsapiKey.trim() || null,
+      base_url: catsapiBase.trim() || null,
+    }
+  }
 
   function openaiProbePayload() {
     return {
@@ -178,6 +191,26 @@ export function SettingsDialog() {
       setError(err instanceof Error ? err.message : "测试连接失败")
     } finally {
       setTesting(false)
+    }
+  }
+
+  async function onTestCatsapiConnection() {
+    setTestingCatsapi(true)
+    setError(null)
+    setOk(null)
+    setCatsapiTestResult(null)
+    try {
+      const result = await testCatsAPIConnection(catsapiProbePayload())
+      setCatsapiTestResult(result)
+      if (result.ok) {
+        setOk(result.message)
+      } else {
+        setError(result.message)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "测试 CatsAPI 连接失败")
+    } finally {
+      setTestingCatsapi(false)
     }
   }
 
@@ -299,9 +332,20 @@ export function SettingsDialog() {
                   <CardContent className="p-4 flex-1 flex flex-col justify-between space-y-3">
                     <FieldGroup className="gap-3">
                       <Field>
-                        <FieldLabel htmlFor="catsapi-key" className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
-                          API Key
-                        </FieldLabel>
+                        <div className="flex items-center justify-between mb-1">
+                          <FieldLabel htmlFor="catsapi-key" className="text-xs font-medium text-slate-700 dark:text-slate-300 block">
+                            API Key
+                          </FieldLabel>
+                          <a
+                            href="https://catsapi.com/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 font-medium hover:underline cursor-pointer"
+                          >
+                            <ExternalLink className="size-3" />
+                            获取密钥
+                          </a>
+                        </div>
                         <Input
                           id="catsapi-key"
                           type="password"
@@ -340,6 +384,37 @@ export function SettingsDialog() {
                           disabled
                         />
                       </Field>
+
+                      <div className="flex flex-wrap items-center gap-2.5 pt-0.5">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 transition-colors shadow-2xs cursor-pointer"
+                          disabled={saving || testingCatsapi}
+                          onClick={() => void onTestCatsapiConnection()}
+                        >
+                          {testingCatsapi ? (
+                            <Spinner data-icon="inline-start" />
+                          ) : (
+                            <Zap className="size-3.5 text-slate-500 mr-1" />
+                          )}
+                          测试连接
+                        </Button>
+                        {catsapiTestResult ? (
+                          catsapiTestResult.ok ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-mono font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700">
+                              <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              正常{catsapiTestResult.latency_ms != null ? ` · ${catsapiTestResult.latency_ms}ms` : ""}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-mono font-medium bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400 border border-rose-200/60 dark:border-rose-800/40">
+                              <span className="size-1.5 rounded-full bg-rose-500" />
+                              异常
+                            </span>
+                          )
+                        ) : null}
+                      </div>
                     </FieldGroup>
                   </CardContent>
 
@@ -392,9 +467,20 @@ export function SettingsDialog() {
                   <CardContent className="p-4 flex-1 space-y-3">
                     <FieldGroup className="gap-3">
                       <Field>
-                        <FieldLabel htmlFor="openai-key" className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
-                          API Key
-                        </FieldLabel>
+                        <div className="flex items-center justify-between mb-1">
+                          <FieldLabel htmlFor="openai-key" className="text-xs font-medium text-slate-700 dark:text-slate-300 block">
+                            API Key
+                          </FieldLabel>
+                          <a
+                            href="https://platform.deepseek.com/usage"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 font-medium hover:underline cursor-pointer"
+                          >
+                            <ExternalLink className="size-3" />
+                            获取密钥
+                          </a>
+                        </div>
                         <Input
                           id="openai-key"
                           type="password"

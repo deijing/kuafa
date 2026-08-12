@@ -15,9 +15,12 @@ def ensure_default_bgm() -> Path:
     existing = sorted(
         [
             *bgm_dir.glob("*.mp3"),
+            *bgm_dir.glob("*.mp4"),
             *bgm_dir.glob("*.m4a"),
             *bgm_dir.glob("*.wav"),
             *bgm_dir.glob("*.aac"),
+            *bgm_dir.glob("*.flac"),
+            *bgm_dir.glob("*.ogg"),
         ]
     )
     if existing:

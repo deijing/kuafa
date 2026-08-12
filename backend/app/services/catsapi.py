@@ -109,3 +109,39 @@ def guess_ext(url: str) -> str:
         if path.endswith(ext):
             return ext
     return ".png"
+
+
+def test_connection(
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> dict[str, Any]:
+    """校验 CatsAPI 密钥与网关连通性。"""
+    key = api_key if api_key is not None and api_key != "" else get_secret("catsapi_key", settings.catsapi_key)
+    base = (base_url if base_url is not None and base_url != "" else get_secret("catsapi_base", settings.catsapi_base)).rstrip("/")
+    if not key:
+        return {"ok": False, "message": "未配置 CatsAPI 密钥，请先填写 Key"}
+
+    started = time.perf_counter()
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.get(
+            f"{base}/tasks/ping_test",
+            headers=headers,
+            timeout=10,
+        )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        if resp.status_code in (401, 403):
+            return {"ok": False, "message": f"密钥验证失败 ({resp.status_code}): 密钥无效或已过期"}
+        if resp.status_code >= 500:
+            return {"ok": False, "message": f"CatsAPI 服务端响应异常 ({resp.status_code})"}
+        return {
+            "ok": True,
+            "message": "CatsAPI 接口通信正常",
+            "latency_ms": latency_ms,
+        }
+    except Exception as e:
+        return {"ok": False, "message": f"网络连接失败: {str(e)}"}

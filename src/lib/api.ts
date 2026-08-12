@@ -89,7 +89,13 @@ export type BatchGenerateResult = {
   jobs: Job[]
 }
 
-export type CoverStyle = "yellow-red" | "black-yellow" | "red-white"
+export type CoverStyle =
+  | "yellow-red"
+  | "black-yellow"
+  | "red-white"
+  | "neon-cyber"
+  | "clean-minimal"
+  | "festive-gold"
 
 export type CoverResult = {
   id: string
@@ -303,6 +309,25 @@ export function fetchOpenAIModels(payload: OpenAIProbePayload) {
 
 export function testOpenAIConnection(payload: OpenAIProbePayload) {
   return request<OpenAITestResult>("/api/settings/openai/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export type CatsAPIProbePayload = {
+  api_key?: string | null
+  base_url?: string | null
+}
+
+export type CatsAPITestResult = {
+  ok: boolean
+  message: string
+  latency_ms: number | null
+}
+
+export function testCatsAPIConnection(payload: CatsAPIProbePayload) {
+  return request<CatsAPITestResult>("/api/settings/catsapi/test", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

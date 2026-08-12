@@ -30,6 +30,7 @@ import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { extractRules } from "@/data/extract-rules"
 import { useMaterials } from "@/hooks/use-materials"
+import { useNotifications } from "@/hooks/use-notifications"
 import {
   createBatchJobs,
   fetchJob,
@@ -119,6 +120,8 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
     jobs.length > 0 &&
     jobs.every((j) => j.status === "succeeded" || j.status === "failed")
 
+  const { notify } = useNotifications()
+
   useEffect(() => {
     if (!jobs.length || allDone) {
       if (allDone) setBusy(false)
@@ -132,10 +135,27 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
             next.every((j) => j.status === "succeeded" || j.status === "failed")
           ) {
             setBusy(false)
+            const succeededCount = next.filter((j) => j.status === "succeeded").length
+            const failedCount = next.filter((j) => j.status === "failed").length
+
             const firstOk = next.find(
               (j) => j.status === "succeeded" && j.output_url
             )
             if (firstOk) setPreviewJobId(firstOk.id)
+
+            if (succeededCount > 0) {
+              notify({
+                title: "批量混剪任务完成",
+                message: `成功生成 ${succeededCount} 个成片${failedCount > 0 ? `，${failedCount} 个失败` : ""}！`,
+                type: "success",
+              })
+            } else {
+              notify({
+                title: "批量任务生成失败",
+                message: "所有批量合成任务均未成功，请检查素材和配置",
+                type: "error",
+              })
+            }
           }
         })
         .catch(() => {
@@ -143,7 +163,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
         })
     }, 800)
     return () => window.clearInterval(timer)
-  }, [jobs, allDone])
+  }, [jobs, allDone, notify])
 
   async function handleBgmUpload(file: File) {
     setUploadingBgm(true)
@@ -478,7 +498,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                         <input
                           type="file"
                           ref={bgmFileInputRef}
-                          accept="audio/*,.mp3,.wav,.m4a,.aac"
+                          accept="audio/*,video/*,.mp3,.mp4,.wav,.m4a,.aac,.flac,.ogg"
                           className="hidden"
                           onChange={(e) => {
                             const file = e.target.files?.[0]
