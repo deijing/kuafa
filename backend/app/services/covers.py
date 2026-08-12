@@ -160,3 +160,105 @@ class CoverJobManager:
 
 
 cover_jobs = CoverJobManager()
+
+
+def _build_svg_cover(text: str, index: int = 0) -> str:
+    text_clean = text.strip() or "爆款热销推荐"
+    chunk_size = 7
+    lines = [text_clean[i : i + chunk_size] for i in range(0, len(text_clean), chunk_size)]
+    if not lines:
+        lines = ["爆款热销推荐"]
+
+    bg_fill = "#FACC15" if index == 0 else "#09090B"
+    stroke_color = "#DC2626" if index == 0 else "#FACC15"
+    title_color = "#DC2626" if index == 0 else "#FACC15"
+    badge_bg = "#DC2626" if index == 0 else "#EAB308"
+    badge_text = "#FFFFFF" if index == 0 else "#09090B"
+    badge_label = "🔥 爆款推荐" if index == 0 else "⚡ 镇店之宝"
+
+    tspan_list = []
+    y_start = 720 - (len(lines[:3]) - 1) * 70
+    for idx, line in enumerate(lines[:3]):
+        y_pos = y_start + idx * 140
+        tspan_list.append(
+            f'<text x="512" y="{y_pos}" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="105" font-weight="900" text-anchor="middle" fill="{title_color}">{line}</text>'
+        )
+
+    tspan_str = "\n".join(tspan_list)
+
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1536" width="1024" height="1536">
+  <rect width="1024" height="1536" fill="{bg_fill}"/>
+  <rect x="96" y="140" width="832" height="180" rx="36" fill="{badge_bg}"/>
+  <text x="512" y="255" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="76" font-weight="900" text-anchor="middle" fill="{badge_text}">{badge_label}</text>
+  <rect x="64" y="400" width="896" height="760" rx="48" fill="#FFFFFF" fill-opacity="0.94" stroke="{stroke_color}" stroke-width="12"/>
+  {tspan_str}
+  <rect x="212" y="1250" width="600" height="130" rx="65" fill="{badge_bg}"/>
+  <text x="512" y="1330" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="52" font-weight="800" text-anchor="middle" fill="{badge_text}">点击看直播 · 领专属优惠</text>
+</svg>"""
+
+
+def generate_video_covers(
+    headline: str,
+    job_id: str,
+    *,
+    count: int = 2,
+    style: str = "yellow-red",
+) -> list[CoverResult]:
+    """
+    基于视频内容与爆款卖点文案，为一键出片视频自动生成配套封面大字报。
+    - 如果配置了 CatsAPI 密钥：调用 GPT Image 2 生成多张 AI 艺术封面
+    - 如果未配置 / 接口限制：生成高清大字报封面，确保视频 100% 含有封面产出成果！
+    """
+    text = (headline or "").strip() or "爆款推荐 独家折扣"
+    results: list[CoverResult] = []
+    out_dir = settings.covers_dir / job_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    api_key = get_secret("catsapi_key", settings.catsapi_key)
+    if api_key:
+        try:
+            for i in range(min(count, 4)):
+                style_prompt = STYLE_HINTS.get(style, STYLE_HINTS["yellow-red"])
+                angle = VARIANT_ANGLES[i % len(VARIANT_ANGLES)]
+                prompt = (
+                    "生成一张中国电商直播短视频竖版封面图，适合抖音/小红书/视频号。"
+                    f"必须醒目展示大字报文案：「{text}」。"
+                    f"文字样式要求：{style_prompt}。"
+                    f"构图：{angle}。"
+                    "画面要有真实带货直播感，服装/商品展示清晰，信息密度高，竖构图 3:4。"
+                )
+                task_id = catsapi.create_image_task(prompt)
+                urls = catsapi.wait_for_images(task_id, timeout_seconds=90)
+                if urls:
+                    url = urls[0]
+                    ext = catsapi.guess_ext(url)
+                    filename = f"cover_{i + 1:02d}{ext}"
+                    dest = out_dir / filename
+                    catsapi.download_image(url, dest)
+                    results.append(
+                        CoverResult(
+                            id=f"{job_id}-{i + 1}",
+                            url=f"/api/media/covers/{job_id}/{filename}",
+                            remote_url=url,
+                        )
+                    )
+        except Exception:
+            pass
+
+    # 回退/补全保底矢量大字报封面
+    if len(results) < count:
+        start_idx = len(results)
+        for i in range(start_idx, count):
+            filename = f"cover_{i + 1:02d}.svg"
+            dest = out_dir / filename
+            svg_content = _build_svg_cover(text, index=i)
+            dest.write_text(svg_content, encoding="utf-8")
+            results.append(
+                CoverResult(
+                    id=f"{job_id}-{i + 1}",
+                    url=f"/api/media/covers/{job_id}/{filename}",
+                    remote_url=None,
+                )
+            )
+
+    return results

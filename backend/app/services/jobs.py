@@ -27,6 +27,7 @@ from app.services.sell_planner import ExtractRules, build_magic_cues, build_sell
 from app.services.sell_renderer import render_sell_video
 from app.services.transcription import TranscriptionError, transcribe_video
 from app.services.ai_sell_judge import ai_judge_sell_plan, collect_ai_candidates
+from app.services.covers import generate_video_covers
 from app.services.openai_client import has_openai_key
 
 
@@ -272,11 +273,29 @@ class JobManager:
                     on_progress=on_progress,
                 )
 
+            # 自动基于本成片视频提取卖点，生成配套封面大字报
+            headline_text = ""
+            if req.mode == "sell":
+                if magic_cues and len(magic_cues) > 0:
+                    headline_text = magic_cues[0].text
+                elif plan and len(plan) > 0:
+                    headline_text = plan[0].text
+            if not headline_text:
+                headline_text = req.title or "爆款切片 极速出片"
+
+            on_progress(94, "基于视频核心卖点自动生成配套爆款封面…")
+            try:
+                covers = generate_video_covers(headline=headline_text, job_id=job_id, count=2)
+            except Exception:
+                covers = []
+
             self._update(
                 job_id,
                 status=JobStatus.succeeded,
                 progress=100,
-                message="成片完成",
+                message="成片及封面生成完成",
+                headline=headline_text,
+                covers=covers,
                 finished_at=datetime.now(timezone.utc).isoformat(),
                 output_url=f"/api/outputs/{job_id}.mp4",
                 output_path=str(out_path),

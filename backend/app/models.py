@@ -217,6 +217,8 @@ class JobOut(BaseModel):
     material_ids: list[str] = Field(default_factory=list)
     group_id: str | None = None
     error: str | None = None
+    headline: str | None = None
+    covers: list[CoverResult] = Field(default_factory=list)
 
 
 class BatchGenerateOut(BaseModel):

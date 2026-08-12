@@ -11,6 +11,8 @@ import {
   Volume2,
   WandSparkles,
   X,
+  Sparkles,
+  ExternalLink,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -460,21 +462,88 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
           ) : null}
 
           {showSuccess ? (
-            <div className="absolute inset-0 z-30 flex flex-col bg-slate-950 rounded-2xl overflow-hidden">
-              <video
-                key={job.output_url}
-                src={job.output_url!}
-                controls
-                className="size-full object-contain"
-              />
-              <div className="absolute right-4 bottom-4">
-                <Button asChild size="sm" className="bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-lg rounded-xl">
-                  <a href={`/api/jobs/${job.id}/download`} download>
-                    <Download className="mr-1.5 size-3.5" />
-                    下载成片
-                  </a>
-                </Button>
+            <div className="absolute inset-0 z-30 flex flex-col md:flex-row bg-slate-950 rounded-2xl overflow-hidden">
+              {/* Video Player */}
+              <div className="relative flex flex-1 items-center justify-center bg-black">
+                <video
+                  key={job.output_url}
+                  src={job.output_url!}
+                  controls
+                  className="size-full max-h-[85vh] object-contain"
+                />
+                <div className="absolute left-4 top-4 z-10 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 text-white backdrop-blur-md border border-white/10 text-xs">
+                  <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
+                  成片完成
+                </div>
+                <div className="absolute right-4 bottom-4 z-10">
+                  <Button asChild size="sm" className="bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-lg rounded-xl">
+                    <a href={`/api/jobs/${job.id}/download`} download>
+                      <Download className="mr-1.5 size-3.5" />
+                      下载成片
+                    </a>
+                  </Button>
+                </div>
               </div>
+
+              {/* Generated Covers Panel */}
+              {job?.covers && job.covers.length > 0 && (
+                <div className="w-full md:w-[300px] shrink-0 border-t md:border-t-0 md:border-l border-slate-800 bg-slate-900/95 p-4 flex flex-col overflow-y-auto">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Sparkles className="size-4 text-amber-400 shrink-0" />
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-100">
+                        基于本视频卖点生成的封面
+                      </h4>
+                      {job.headline && (
+                        <p className="text-[11px] text-slate-400 truncate max-w-[220px]">
+                          文案：「{job.headline}」
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-1 gap-3 flex-1 overflow-y-auto">
+                    {job.covers.map((cover, idx) => (
+                      <div
+                        key={cover.id}
+                        className="group relative flex flex-col rounded-xl border border-slate-800 bg-slate-950 p-2 transition-all hover:border-blue-500"
+                      >
+                        <div className="relative aspect-[3/4] w-full overflow-hidden rounded-lg bg-slate-900">
+                          <img
+                            src={cover.url}
+                            alt=""
+                            className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                          />
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-1">
+                          <span className="text-[10px] font-medium text-slate-400">
+                            封面 #{idx + 1}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <a
+                              href={cover.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="p-1 text-slate-400 hover:text-slate-200 text-[10px] flex items-center gap-0.5"
+                              title="新窗口预览"
+                            >
+                              <ExternalLink className="size-3" />
+                            </a>
+                            <a
+                              href={cover.url}
+                              download={`cover_${idx + 1}`}
+                              className="px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-medium flex items-center gap-1 cursor-pointer"
+                            >
+                              <Download className="size-2.5" />
+                              下载
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ) : null}
 

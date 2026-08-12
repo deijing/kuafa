@@ -45,6 +45,8 @@ export type Job = {
   material_ids: string[]
   group_id: string | null
   error: string | null
+  headline?: string | null
+  covers?: CoverResult[]
 }
 
 export type BgmItem = {
