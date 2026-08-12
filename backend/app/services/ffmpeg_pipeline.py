@@ -1,11 +1,148 @@
-from __future__ import annotations
-
 import json
+import logging
+import os
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def check_subtitles_filter(ffmpeg_path: str) -> bool:
+    """检查给定的 ffmpeg 可执行文件是否支持 subtitles / ass (libass) 滤镜。"""
+    if not ffmpeg_path or not os.path.isfile(ffmpeg_path):
+        return False
+    try:
+        res = subprocess.run(
+            [ffmpeg_path, "-filters"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        output = (res.stdout or "") + (res.stderr or "")
+        return "subtitles" in output or "ass" in output
+    except Exception:
+        return False
+
+
+def resolve_ffmpeg_bins() -> tuple[str, str, bool]:
+    """
+    自动查找最优质的 ffmpeg / ffprobe 可执行文件及其字幕滤镜 (libass) 支持情况。
+    支持自动探测 /opt/homebrew/opt/ffmpeg-full/bin/ffmpeg 等路径。
+    返回 (ffmpeg_bin, ffprobe_bin, has_subtitles_filter)
+    """
+    env_ffmpeg = os.environ.get("KUAFA_FFMPEG_BIN")
+    env_ffprobe = os.environ.get("KUAFA_FFPROBE_BIN")
+
+    candidates = [
+        env_ffmpeg,
+        "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
+        "/usr/local/opt/ffmpeg-full/bin/ffmpeg",
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        shutil.which("ffmpeg"),
+    ]
+    existing_candidates = [c for c in candidates if c and os.path.isfile(c)]
+
+    best_ffmpeg = None
+    has_subtitles = False
+
+    # 1. 优先寻找内置 libass (subtitles 滤镜) 的 FFmpeg
+    for c in existing_candidates:
+        if check_subtitles_filter(c):
+            best_ffmpeg = c
+            has_subtitles = True
+            break
+
+    # 2. 回退到第一个可用的 ffmpeg
+    if not best_ffmpeg and existing_candidates:
+        best_ffmpeg = existing_candidates[0]
+
+    if not best_ffmpeg:
+        best_ffmpeg = "ffmpeg"
+
+    # 对应查找 ffprobe
+    best_ffprobe = env_ffprobe
+    if not best_ffprobe and best_ffmpeg != "ffmpeg":
+        probe_sibling = str(Path(best_ffmpeg).parent / "ffprobe")
+        if os.path.isfile(probe_sibling):
+            best_ffprobe = probe_sibling
+
+    if not best_ffprobe:
+        candidates_probe = [
+            "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe",
+            "/usr/local/opt/ffmpeg-full/bin/ffprobe",
+            "/opt/homebrew/bin/ffprobe",
+            "/usr/local/bin/ffprobe",
+            shutil.which("ffprobe"),
+        ]
+        for p in candidates_probe:
+            if p and os.path.isfile(p):
+                best_ffprobe = p
+                break
+
+    if not best_ffprobe:
+        best_ffprobe = "ffprobe"
+
+    return best_ffmpeg, best_ffprobe, has_subtitles
+
+
+def resolve_subtitle_font() -> str:
+    """
+    解析可供 libass 读取的中文字体名称。
+    解决 macOS 苹方 (PingFang SC) 位于私有字库 PingFangUI.ttc 无法被 libass 解析的问题。
+    """
+    env_font = os.environ.get("KUAFA_SUBTITLE_FONT") or getattr(settings, "subtitle_font", None)
+    if env_font and env_font.strip():
+        return env_font.strip()
+
+    system = sys.platform
+    if system == "darwin":
+        # macOS 首选 Hiragino Sans GB (冬青黑体)，避免 PingFangUI.ttc 报 Error opening font
+        return "Hiragino Sans GB"
+    elif system == "win32":
+        return "Microsoft YaHei"
+    else:
+        return "Noto Sans CJK SC"
+
+
+_FFMPEG_STATUS_CHECKED = False
+_HAS_SUBTITLES_FILTER = True
+
+
+def ensure_ffmpeg_configured() -> tuple[str, str, bool]:
+    global _FFMPEG_STATUS_CHECKED, _HAS_SUBTITLES_FILTER
+    ffmpeg_bin, ffprobe_bin, has_sub = resolve_ffmpeg_bins()
+    settings.ffmpeg_bin = ffmpeg_bin
+    settings.ffprobe_bin = ffprobe_bin
+    _HAS_SUBTITLES_FILTER = has_sub
+
+    if not _FFMPEG_STATUS_CHECKED:
+        _FFMPEG_STATUS_CHECKED = True
+        logger.info("已检测配置 FFmpeg: %s, FFprobe: %s (字幕滤镜支持: %s)", ffmpeg_bin, ffprobe_bin, has_sub)
+        if not has_sub:
+            logger.warning(
+                "⚠️ 警告: 当前 FFmpeg (%s) 未编译 libass (缺少 subtitles 滤镜)！"
+                "烧录字幕时将报错。推荐安装 ffmpeg-full: brew install ffmpeg-full 并配置 KUAFA_FFMPEG_BIN=/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
+                ffmpeg_bin,
+            )
+
+    return ffmpeg_bin, ffprobe_bin, has_sub
+
+
+def get_ffmpeg_status() -> dict[str, object]:
+    ffmpeg_bin, ffprobe_bin, has_sub = ensure_ffmpeg_configured()
+    font_name = resolve_subtitle_font()
+    return {
+        "ffmpeg_bin": ffmpeg_bin,
+        "ffprobe_bin": ffprobe_bin,
+        "has_subtitles_filter": has_sub,
+        "subtitle_font": font_name,
+    }
 
 
 @dataclass

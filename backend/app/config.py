@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     segment_seconds: float = 5.0
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
+    subtitle_font: str = ""
 
     # CatsAPI · GPT Image 2
     catsapi_key: str = ""

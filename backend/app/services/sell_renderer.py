@@ -4,7 +4,12 @@ import re
 from pathlib import Path
 
 from app.config import settings
-from app.services.ffmpeg_pipeline import probe, run_cmd
+from app.services.ffmpeg_pipeline import (
+    ensure_ffmpeg_configured,
+    probe,
+    resolve_subtitle_font,
+    run_cmd,
+)
 from app.services.sell_planner import EditClip, MagicCue
 
 
@@ -123,8 +128,9 @@ def write_ass_subtitles(
     - Default：口播字幕，每段 ≤10 字、单行不换行，按时长比例逐段弹出
     - Hook：神奇大字，顶部缩放淡入动效
     """
-    # WrapStyle:2 = 不自动换行；字幕内容本身也不含 \\N
-    header = """[Script Info]
+    # WrapStyle:2 = 不自动换行；字幕内容本身也不含 \N
+    font_name = resolve_subtitle_font()
+    header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
@@ -132,8 +138,8 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,PingFang SC,64,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,2,0,1,4,0,2,80,80,220,1
-Style: Hook,PingFang SC,110,&H0000D7FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,4,0,1,5,0,8,60,60,160,1
+Style: Default,{font_name},64,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,2,0,1,4,0,2,80,80,220,1
+Style: Hook,{font_name},110,&H0000D7FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,4,0,1,5,0,8,60,60,160,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -290,6 +296,13 @@ def render_sell_video(
     current = concat_path
 
     if add_subtitles or magic_cues:
+        ffmpeg_bin, _, has_sub = ensure_ffmpeg_configured()
+        if not has_sub:
+            raise RuntimeError(
+                f"当前 FFmpeg ({ffmpeg_bin}) 未找到 subtitles (libass) 滤镜，无法进行字幕烧录。\n"
+                f"推荐安装支持 libass 的 FFmpeg（例如 Mac 终端运行: brew install ffmpeg-full），"
+                f"并在环境变量中指定 KUAFA_FFMPEG_BIN=/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
+            )
         on_progress(
             82,
             "烧录字幕与神奇大字动效…" if magic_cues else "烧录口播字幕…",

@@ -45,12 +45,14 @@ from app.services.materials import (
     save_upload,
     seed_demo_group_from_case,
 )
+from app.services.ffmpeg_pipeline import ensure_ffmpeg_configured, get_ffmpeg_status
 from app.services.openai_client import OpenAICompatError, list_models, test_connection
 from app.services.secrets import secrets_status, update_secrets
 
 
 ensure_dirs()
 seed_demo_group_from_case()
+ensure_ffmpeg_configured()
 
 app = FastAPI(title="快发 API", version="0.2.0")
 
@@ -119,10 +121,12 @@ async def upload_bgm_file(file: UploadFile = File(...)) -> dict[str, object]:
 @app.get("/api/health")
 def health() -> dict[str, object]:
     materials_dir = get_materials_dir()
+    ffmpeg_info = get_ffmpeg_status()
     return {
         "status": "ok",
         "materials_dir": str(materials_dir),
         "default_materials_dir": str(settings.default_materials_dir.resolve()),
+        "ffmpeg": ffmpeg_info,
     }
 
 
