@@ -188,6 +188,22 @@ class CatsAPITestOut(BaseModel):
     latency_ms: int | None = None
 
 
+class EnvCheckItem(BaseModel):
+    id: str
+    name: str
+    status: Literal["pass", "warn", "fail"]
+    message: str
+    detail: str | None = None
+    fix_suggestion: str | None = None
+
+
+class EnvCheckResult(BaseModel):
+    passed: bool
+    critical_errors: int
+    warnings: int
+    items: list[EnvCheckItem]
+
+
 class JobOut(BaseModel):
     id: str
     status: JobStatus

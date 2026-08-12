@@ -334,6 +334,26 @@ export function testCatsAPIConnection(payload: CatsAPIProbePayload) {
   })
 }
 
+export type EnvCheckItem = {
+  id: string
+  name: string
+  status: "pass" | "warn" | "fail"
+  message: string
+  detail: string | null
+  fix_suggestion: string | null
+}
+
+export type EnvCheckResult = {
+  passed: boolean
+  critical_errors: number
+  warnings: number
+  items: EnvCheckItem[]
+}
+
+export function fetchEnvironmentCheck() {
+  return request<EnvCheckResult>("/api/environment/check")
+}
+
 export function fetchBgmFiles() {
   return request<BgmItem[]>("/api/bgm")
 }

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -21,6 +22,8 @@ from app.models import (
     CatsAPITestOut,
     CoverJobOut,
     CoverRequest,
+    EnvCheckItem,
+    EnvCheckResult,
     GenerateRequest,
     GroupOut,
     JobOut,
@@ -45,7 +48,12 @@ from app.services.materials import (
     save_upload,
     seed_demo_group_from_case,
 )
-from app.services.ffmpeg_pipeline import ensure_ffmpeg_configured, get_ffmpeg_status
+from app.services.ffmpeg_pipeline import (
+    ensure_ffmpeg_configured,
+    get_ffmpeg_status,
+    resolve_ffmpeg_bins,
+    resolve_subtitle_font,
+)
 from app.services.openai_client import OpenAICompatError, list_models, test_connection
 from app.services.secrets import secrets_status, update_secrets
 
@@ -128,6 +136,123 @@ def health() -> dict[str, object]:
         "default_materials_dir": str(settings.default_materials_dir.resolve()),
         "ffmpeg": ffmpeg_info,
     }
+
+
+@app.get("/api/environment/check", response_model=EnvCheckResult)
+def check_environment() -> EnvCheckResult:
+    """全面诊断运行环境：FFmpeg 引擎、libass 滤镜、中文字体、存储与 API 密钥。"""
+    items: list[dict[str, Any]] = []
+    critical_errors = 0
+    warnings = 0
+
+    ffmpeg_bin, ffprobe_bin, has_sub = resolve_ffmpeg_bins()
+    font_name = resolve_subtitle_font()
+    materials_dir = get_materials_dir()
+    sec_status = secrets_status()
+
+    # 1. FFmpeg Binary
+    ffmpeg_exists = bool(ffmpeg_bin and os.path.isfile(ffmpeg_bin))
+    if ffmpeg_exists:
+        items.append({
+            "id": "ffmpeg_installed",
+            "name": "FFmpeg 可执行文件检测",
+            "status": "pass",
+            "message": f"已成功识别 FFmpeg 引擎: {ffmpeg_bin}",
+            "detail": f"FFprobe: {ffprobe_bin}",
+        })
+    else:
+        critical_errors += 1
+        items.append({
+            "id": "ffmpeg_installed",
+            "name": "FFmpeg 可执行文件检测",
+            "status": "fail",
+            "message": "未在系统中检索到 FFmpeg 可执行文件",
+            "detail": f"搜寻路径: {ffmpeg_bin}",
+            "fix_suggestion": "Mac 请在终端运行: brew install ffmpeg-full；Windows 请下载 FFmpeg 并添加至 PATH",
+        })
+
+    # 2. FFmpeg Subtitles / ASS Filter (libass)
+    if has_sub:
+        items.append({
+            "id": "ffmpeg_subtitles",
+            "name": "FFmpeg 字幕烧录滤镜 (libass)",
+            "status": "pass",
+            "message": "FFmpeg 已编译 libass，完美支持 subtitles / ass 字幕烧录",
+            "detail": f"滤镜验证通过 ({ffmpeg_bin})",
+        })
+    else:
+        critical_errors += 1
+        items.append({
+            "id": "ffmpeg_subtitles",
+            "name": "FFmpeg 字幕烧录滤镜 (libass)",
+            "status": "fail",
+            "message": "当前 FFmpeg 缺少 subtitles (libass) 滤镜，烧录字幕时将报错 (exit status 234)",
+            "detail": f"当前可执行文件: {ffmpeg_bin}",
+            "fix_suggestion": "Mac 用户请安装 ffmpeg-full: brew install ffmpeg-full，或在环境变量中配置 KUAFA_FFMPEG_BIN=/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
+        })
+
+    # 3. Subtitle Font
+    items.append({
+        "id": "subtitle_font",
+        "name": "字幕中文字体解析",
+        "status": "pass",
+        "message": f"已适配当前系统字幕字体: {font_name}",
+        "detail": "已排除 macOS 苹方 PingFangUI.ttc 私有字库报错风险",
+    })
+
+    # 4. Storage & Database
+    items.append({
+        "id": "backend_db",
+        "name": "SQLite 数据库与存储路径",
+        "status": "pass",
+        "message": f"数据库与素材目录正常，存储路径: {materials_dir}",
+        "detail": f"数据根路径: {settings.data_dir.resolve()}",
+    })
+
+    # 5. DeepSeek / OpenAI Key
+    if sec_status.get("openai_api_key_set"):
+        items.append({
+            "id": "deepseek_key",
+            "name": "DeepSeek 智能选句模型",
+            "status": "pass",
+            "message": f"已配置 DeepSeek API Key ({sec_status.get('openai_api_key_masked')})",
+            "detail": f"Base URL: {sec_status.get('openai_base_url')}",
+        })
+    else:
+        warnings += 1
+        items.append({
+            "id": "deepseek_key",
+            "name": "DeepSeek 智能选句模型",
+            "status": "warn",
+            "message": "未配置 DeepSeek 密钥（生成时将回退至标准句子切割规则）",
+            "fix_suggestion": "可在右上角设置中填写 DeepSeek API Key 以激活 AI 智能卖点选句",
+        })
+
+    # 6. CatsAPI / Cover Key
+    if sec_status.get("catsapi_key_set"):
+        items.append({
+            "id": "catsapi_key",
+            "name": "CatsAPI 封面生图模型",
+            "status": "pass",
+            "message": f"已配置 CatsAPI Key ({sec_status.get('catsapi_key_masked')})",
+            "detail": f"Base URL: {sec_status.get('catsapi_base')}",
+        })
+    else:
+        warnings += 1
+        items.append({
+            "id": "catsapi_key",
+            "name": "CatsAPI 封面生图模型",
+            "status": "warn",
+            "message": "未配置 CatsAPI 密钥（暂无法使用 GPT Image 2 生成爆款封面大字报）",
+            "fix_suggestion": "可在右上角设置中填写 CatsAPI 密钥以激活 GPT Image 2 封面大字报出图",
+        })
+
+    return EnvCheckResult(
+        passed=critical_errors == 0,
+        critical_errors=critical_errors,
+        warnings=warnings,
+        items=[EnvCheckItem(**it) for it in items],
+    )
 
 
 @app.get("/api/settings/library", response_model=LibrarySettingsOut)

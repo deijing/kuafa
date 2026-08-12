@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react"
 import { Bell, Moon, Plus, Sun, CheckCircle2, AlertCircle, Info, Trash2, CheckCheck, Volume2 } from "lucide-react"
 
+import { EnvCheckDialog } from "@/components/layout/EnvCheckDialog"
 import { SettingsDialog } from "@/components/layout/SettingsDialog"
 import { Button } from "@/components/ui/button"
 import { useTheme } from "@/components/theme-provider"
@@ -173,6 +174,7 @@ export function AppHeader({ title }: AppHeaderProps) {
           )}
         </div>
 
+        <EnvCheckDialog />
         <SettingsDialog />
         <Button className="rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white shadow-xs hover:shadow-md transition-all active:scale-[0.98] font-medium text-xs md:text-sm px-4 py-2 cursor-pointer border-none">
           <Plus data-icon="inline-start" className="size-4 mr-1" />
