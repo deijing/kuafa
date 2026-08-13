@@ -122,19 +122,23 @@ def list_bgm_files() -> list[dict[str, object]]:
 async def upload_bgm_file(file: UploadFile = File(...)) -> dict[str, object]:
     if not file.filename:
         raise HTTPException(400, "缺少文件名")
-    ext = Path(file.filename).suffix.lower()
+    safe_name = Path(file.filename).name
+    ext = Path(safe_name).suffix.lower()
     if ext not in ALLOWED_BGM_EXTENSIONS:
         raise HTTPException(400, "仅支持 mp3, mp4, wav, m4a, aac 等音视频格式")
-    data = await file.read()
-    if not data:
-        raise HTTPException(400, "空音频文件")
     settings.bgm_dir.mkdir(parents=True, exist_ok=True)
-    save_path = settings.bgm_dir / file.filename
-    save_path.write_bytes(data)
+    save_path = settings.bgm_dir / safe_name
+    import shutil
+    with save_path.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    size = save_path.stat().st_size
+    if size == 0:
+        save_path.unlink(missing_ok=True)
+        raise HTTPException(400, "空音频文件")
     return {
-        "filename": file.filename,
-        "url": f"/api/bgm/{file.filename}",
-        "size_bytes": len(data),
+        "filename": safe_name,
+        "url": f"/api/bgm/{safe_name}",
+        "size_bytes": size,
     }
 
 
@@ -472,7 +476,9 @@ def export_jobs_zip(req: JobExportZipRequest, background_tasks: BackgroundTasks)
             if req.include_covers and job.covers:
                 for c_idx, cover in enumerate(job.covers, 1):
                     cover_filename = cover.url.split("/")[-1]
-                    cover_path = settings.covers_dir / cover_filename
+                    cover_path = settings.covers_dir / jid / cover_filename
+                    if not cover_path.exists():
+                        cover_path = settings.covers_dir / cover_filename
                     if cover_path.exists():
                         zf.write(
                             cover_path,

@@ -197,6 +197,7 @@ def probe(path: Path) -> MediaInfo:
 
 
 _probe_cache: dict[str, tuple[int, MediaInfo]] = {}
+_probe_cache_lock = threading.Lock()
 
 
 def probe_cached(path: Path) -> MediaInfo:
@@ -204,11 +205,13 @@ def probe_cached(path: Path) -> MediaInfo:
     resolved = path.resolve()
     key = str(resolved)
     mtime_ns = resolved.stat().st_mtime_ns
-    hit = _probe_cache.get(key)
-    if hit and hit[0] == mtime_ns:
-        return hit[1]
+    with _probe_cache_lock:
+        hit = _probe_cache.get(key)
+        if hit and hit[0] == mtime_ns:
+            return hit[1]
     info = probe(resolved)
-    _probe_cache[key] = (mtime_ns, info)
+    with _probe_cache_lock:
+        _probe_cache[key] = (mtime_ns, info)
     return info
 
 
@@ -392,6 +395,8 @@ def render_highlight_reel(
             .replace(":", "\\:")
             .replace("'", "\\'")
             .replace("%", "\\%")
+            .replace(",", "\\,")
+            .replace(";", "\\;")
         )
         draw = (
             f"drawbox=x=0:y=80:w=iw:h=90:color=red@0.85:t=fill,"

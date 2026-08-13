@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -228,14 +229,15 @@ def _build_svg_cover(
         badge_bg = "#DC2626"
         badge_text = "#FFFFFF"
 
-    badge_label = f"🔥 {group_name}" if group_name else "🔥 抖音爆款"
+    badge_label = html.escape(f"🔥 {group_name}" if group_name else "🔥 抖音爆款")
 
     tspan_list = []
     y_start = 820 - (len(lines[:3]) - 1) * 65
     for idx, line in enumerate(lines[:3]):
         y_pos = y_start + idx * 135
+        safe_line = html.escape(line)
         tspan_list.append(
-            f'<text x="512" y="{y_pos}" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="100" font-weight="900" text-anchor="middle" fill="{title_color}">{line}</text>'
+            f'<text x="512" y="{y_pos}" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="100" font-weight="900" text-anchor="middle" fill="{title_color}">{safe_line}</text>'
         )
 
     tspan_str = "\n".join(tspan_list)

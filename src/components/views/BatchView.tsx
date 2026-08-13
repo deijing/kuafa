@@ -43,6 +43,7 @@ import {
   fetchJobs,
   generateJobCovers,
   uploadBgm,
+  type BatchGenerateResult,
   type BgmItem,
   type CoverStyle,
   type DurationPreference,
@@ -298,17 +299,22 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
     if (!doneJobs.length) return
     setBusy(true)
     try {
-      const updatedList = await Promise.all(
+      const results = await Promise.allSettled(
         doneJobs.map((j) => generateJobCovers(j.id, j.headline ?? undefined, 3, coverStyle))
       )
-      setJobs((prev) =>
-        prev.map((j) => updatedList.find((u) => u.id === j.id) ?? j)
-      )
-      notify({
-        title: "全套爆款封面生成完成",
-        message: `已成功为 ${updatedList.length} 条成片生成 3 张配套高颜值封面！`,
-        type: "success",
-      })
+      const updatedList = results
+        .filter((r): r is PromiseFulfilledResult<Job> => r.status === "fulfilled")
+        .map((r) => r.value)
+      if (updatedList.length > 0) {
+        setJobs((prev) =>
+          prev.map((j) => updatedList.find((u) => u.id === j.id) ?? j)
+        )
+        notify({
+          title: "全套爆款封面生成完成",
+          message: `已成功为 ${updatedList.length} 条成片生成 3 张配套高颜值封面！`,
+          type: "success",
+        })
+      }
     } catch (err) {
       notify({
         title: "生成封面失败",
@@ -396,7 +402,7 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
     setPreviewJobId(null)
     try {
       const n = countNum
-      const results = await Promise.all(
+      const results = await Promise.allSettled(
         usable.map((group) =>
           createBatchJobs({
             group_id: group.id,
@@ -422,9 +428,16 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
           })
         )
       )
-      const createdList = results.flatMap((r) => r.jobs)
-      setJobs(createdList)
-      registerJobs(createdList)
+      const createdList = results
+        .filter((r): r is PromiseFulfilledResult<BatchGenerateResult> => r.status === "fulfilled")
+        .flatMap((r) => r.value.jobs)
+      if (createdList.length > 0) {
+        setJobs(createdList)
+        registerJobs(createdList)
+      } else {
+        setBusy(false)
+        setError("创建批量任务失败，请检查素材后重试")
+      }
     } catch (err) {
       setBusy(false)
       setError(err instanceof Error ? err.message : "创建批量任务失败")

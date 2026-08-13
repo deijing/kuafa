@@ -118,7 +118,12 @@ export function ImagePreviewModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-between bg-black/90 backdrop-blur-md animate-in fade-in-0 duration-200 select-none">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+      className="fixed inset-0 z-50 flex flex-col items-center justify-between bg-black/90 backdrop-blur-md animate-in fade-in-0 duration-200 select-none"
+    >
       {/* Top Action Header */}
       <div className="flex w-full items-center justify-between px-6 py-4 text-white z-10 bg-gradient-to-b from-black/80 to-transparent">
         <div className="flex items-center gap-3">

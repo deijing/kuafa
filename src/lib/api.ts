@@ -143,14 +143,15 @@ export type CoverPayload = {
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   if (!res.ok) {
-    let detail = res.statusText
+    let detail: unknown = res.statusText
     try {
       const body = await res.json()
       detail = body.detail ?? JSON.stringify(body)
     } catch {
       /* ignore */
     }
-    throw new Error(typeof detail === "string" ? detail : "请求失败")
+    const message = typeof detail === "string" ? detail : JSON.stringify(detail)
+    throw new Error(message || "请求失败")
   }
   return res.json() as Promise<T>
 }
@@ -259,7 +260,7 @@ export async function exportJobsZip(jobIds: string[], includeCovers: boolean = t
   document.body.appendChild(a)
   a.click()
   a.remove()
-  window.URL.revokeObjectURL(url)
+  setTimeout(() => window.URL.revokeObjectURL(url), 10000)
 }
 
 export async function uploadMaterial(file: File, groupId: string) {
