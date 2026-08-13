@@ -17,6 +17,7 @@ import {
   XCircle,
   Sparkles,
   ZoomIn,
+  Film,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -902,82 +903,89 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
       </Card>
 
       <div className="flex min-w-0 flex-1 flex-col gap-6">
-        <Card className="flex flex-col border border-black/[0.04] dark:border-slate-800 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)] bg-white dark:bg-slate-900 rounded-2xl">
-          <CardHeader className="py-4 px-6 border-b border-[#F3F4F6] dark:border-slate-800 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-semibold text-[#111827] dark:text-slate-100">
-              {selectedGroups.length
-                ? `已选 ${selectedGroups.length} 组 · ${totalClips} 段素材`
-                : "勾选素材组后预览素材"}
-            </CardTitle>
-            <div className="flex items-center gap-3">
-              {onGoHistory && (
+        {/* Material Selection Preview Card - Only shown before generation to save vertical space */}
+        {jobs.length === 0 ? (
+          <Card className="flex flex-col border border-black/[0.04] dark:border-slate-800 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)] bg-white dark:bg-slate-900 rounded-2xl shrink-0">
+            <CardHeader className="py-4 px-6 border-b border-[#F3F4F6] dark:border-slate-800 flex flex-row items-center justify-between">
+              <CardTitle className="text-sm font-semibold text-[#111827] dark:text-slate-100">
+                {selectedGroups.length
+                  ? `已选 ${selectedGroups.length} 组 · ${totalClips} 段素材`
+                  : "勾选素材组后预览素材"}
+              </CardTitle>
+              <div className="flex items-center gap-3">
+                {onGoHistory && (
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-slate-600 hover:text-blue-600 dark:text-slate-400 cursor-pointer transition-colors flex items-center gap-1"
+                    onClick={onGoHistory}
+                  >
+                    <History className="size-3.5" />
+                    查看成片历史
+                  </button>
+                )}
                 <button
                   type="button"
-                  className="text-xs font-medium text-slate-600 hover:text-blue-600 dark:text-slate-400 cursor-pointer transition-colors flex items-center gap-1"
-                  onClick={onGoHistory}
+                  className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 cursor-pointer transition-colors"
+                  onClick={onGoLibrary}
                 >
-                  <History className="size-3.5" />
-                  查看成片历史
+                  去素材库管理
                 </button>
-              )}
-              <button
-                type="button"
-                className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 cursor-pointer transition-colors"
-                onClick={onGoLibrary}
-              >
-                去素材库管理
-              </button>
-            </div>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3.5 p-5">
-            <div className="relative flex items-center overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 p-4">
-              <div className="flex h-20 min-w-max items-center gap-3">
-                {selectedMaterials.length ? (
-                  selectedMaterials.map((clip, index) => (
-                    <div
-                      key={clip.id}
-                      className="group relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-slate-200/80 dark:border-slate-700/80 bg-slate-200 shadow-2xs"
-                      title={`${clip.group_name} · ${clip.filename}`}
-                    >
-                      {clip.thumb_url ? (
-                        <img
-                          src={clip.thumb_url}
-                          alt=""
-                          className="absolute inset-0 size-full object-cover opacity-90"
-                        />
-                      ) : null}
-                      <span className="absolute bottom-1 left-1 rounded bg-[#111827]/80 px-1.5 py-0.5 text-[9px] font-bold font-mono text-white">
-                        {index + 1}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="flex items-center gap-2 py-4 text-xs text-[#9CA3AF]">
-                    <Layers className="size-4 text-[#9CA3AF]" />
-                    <span>请勾选一个或多个素材组，即可一键批量成片。</span>
-                  </div>
-                )}
               </div>
-            </div>
-            <p className="flex items-center gap-1.5 text-[13px] text-[#9CA3AF]">
-              <Info className="size-3.5 text-[#9CA3AF] shrink-0" />
-              每个素材组独立成片；多条会自动换句序与结构侧重，避免内容完全重复。
-            </p>
-          </CardContent>
-        </Card>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3.5 p-5">
+              <div className="relative flex items-center overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 p-3">
+                <div className="flex h-16 min-w-max items-center gap-2.5">
+                  {selectedMaterials.length ? (
+                    selectedMaterials.map((clip, index) => (
+                      <div
+                        key={clip.id}
+                        className="group relative size-14 shrink-0 overflow-hidden rounded-lg border border-slate-200/80 dark:border-slate-700/80 bg-slate-100 dark:bg-slate-800 shadow-2xs flex flex-col items-center justify-center"
+                        title={`${clip.group_name} · ${clip.filename}`}
+                      >
+                        {clip.thumb_url ? (
+                          <img
+                            src={clip.thumb_url}
+                            alt=""
+                            className="absolute inset-0 size-full object-cover opacity-90"
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center justify-center p-1 text-slate-400">
+                            <Film className="size-4 text-blue-500/70 mb-0.5" />
+                          </div>
+                        )}
+                        <span className="absolute bottom-1 left-1 rounded bg-[#111827]/80 px-1 py-0.5 text-[8px] font-bold font-mono text-white">
+                          #{index + 1}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="flex items-center gap-2 py-3 px-2 text-xs text-[#9CA3AF]">
+                      <Layers className="size-4 text-[#9CA3AF]" />
+                      <span>请勾选一个或多个素材组，即可一键批量成片。</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <p className="flex items-center gap-1.5 text-xs text-[#9CA3AF]">
+                <Info className="size-3.5 text-[#9CA3AF] shrink-0" />
+                每个素材组独立成片；多条会自动换句序与结构侧重，避免内容完全重复。
+              </p>
+            </CardContent>
+          </Card>
+        ) : null}
 
         {jobs.length > 0 ? (
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl px-5 py-3 shadow-2xs">
+              <div className="flex items-center gap-2.5">
+                <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
                   本轮成片记录 ({jobs.length} 条)
                 </span>
                 {jobs.some((j) => j.status === "succeeded") ? (
                   <button
                     type="button"
                     onClick={toggleSelectAllExportJobs}
-                    className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 cursor-pointer ml-1"
+                    className="text-xs font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400 cursor-pointer px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/40"
                   >
                     {selectedExportJobIds.length === jobs.filter((j) => j.status === "succeeded").length
                       ? "取消全选"
@@ -987,6 +995,31 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
               </div>
 
               <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleResetBatch}
+                  disabled={busy}
+                  className="h-8 text-xs font-semibold rounded-xl border-blue-200 bg-blue-50/60 text-blue-600 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-400 cursor-pointer gap-1"
+                >
+                  <Plus className="size-3.5" />
+                  新建页面
+                </Button>
+
+                {onGoHistory && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={onGoHistory}
+                    className="h-8 text-xs font-medium rounded-xl border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer gap-1"
+                  >
+                    <History className="size-3.5 text-slate-500" />
+                    成片历史
+                  </Button>
+                )}
+
                 {jobs.some((j) => j.status === "succeeded") ? (
                   <Button
                     type="button"
@@ -994,10 +1027,10 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
                     size="sm"
                     disabled={busy}
                     onClick={() => void handleGenerateCoversForAll()}
-                    className="h-7 px-2.5 text-xs font-medium border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100 cursor-pointer gap-1.5"
+                    className="h-8 px-3 text-xs font-medium border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100 cursor-pointer gap-1.5 rounded-xl"
                   >
                     <Sparkles className="size-3.5 text-amber-500" />
-                    一键为全部成片生成封面
+                    一键成片封面
                   </Button>
                 ) : null}
 
@@ -1007,14 +1040,14 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
                     size="sm"
                     disabled={exportingZip}
                     onClick={() => void handleExportSelectedZip()}
-                    className="h-7 px-3 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white cursor-pointer gap-1.5 shadow-2xs"
+                    className="h-8 px-3.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white cursor-pointer gap-1.5 shadow-2xs rounded-xl border-none"
                   >
                     {exportingZip ? (
-                      <Loader2 className="size-3 animate-spin text-white" />
+                      <Loader2 className="size-3.5 animate-spin text-white" />
                     ) : (
                       <Download className="size-3.5" />
                     )}
-                    打包导出已选 ({selectedExportJobIds.length}条成片+配套封面 ZIP)
+                    打包导出已选 ({selectedExportJobIds.length}条 ZIP)
                   </Button>
                 ) : null}
               </div>
