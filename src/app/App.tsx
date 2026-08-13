@@ -10,9 +10,9 @@ import { HistoryView } from "@/components/views/HistoryView"
 import { LibraryView } from "@/components/views/LibraryView"
 import { ToastContainer } from "@/components/layout/ToastContainer"
 import { ActiveJobBanner } from "@/components/layout/ActiveJobBanner"
-import { MaterialsProvider } from "@/hooks/use-materials"
-import { NotificationProvider } from "@/hooks/use-notifications"
-import { JobsProvider } from "@/hooks/use-jobs"
+import { MaterialsProvider } from "@/hooks/materials-provider"
+import { NotificationProvider } from "@/hooks/notifications-provider"
+import { JobsProvider } from "@/hooks/jobs-provider"
 import { PATH_TO_TAB, TAB_PATHS, TAB_TITLES } from "@/types/nav"
 
 export function App() {

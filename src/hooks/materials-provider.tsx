@@ -1,7 +1,5 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useState,
@@ -17,32 +15,9 @@ import {
   updateLibrarySettings,
   uploadMaterial,
   type LibrarySettings,
-  type Material,
   type MaterialGroup,
 } from "@/lib/api"
-
-type MaterialsContextValue = {
-  groups: MaterialGroup[]
-  materials: Material[]
-  selectedIds: string[]
-  activeGroupId: string | null
-  settings: LibrarySettings | null
-  loading: boolean
-  error: string | null
-  refresh: () => Promise<void>
-  setActiveGroupId: (id: string | null) => void
-  toggleSelect: (id: string) => void
-  selectGroup: (groupId: string) => void
-  selectAll: () => void
-  clearSelection: () => void
-  createGroup: (name: string) => Promise<void>
-  renameGroup: (groupId: string, name: string) => Promise<void>
-  upload: (file: File, groupId?: string) => Promise<void>
-  saveMaterialsDir: (dir: string) => Promise<void>
-  resetMaterialsDir: () => Promise<void>
-}
-
-const MaterialsContext = createContext<MaterialsContextValue | null>(null)
+import { MaterialsContext } from "@/hooks/use-materials"
 
 export function MaterialsProvider({ children }: { children: ReactNode }) {
   const [groups, setGroups] = useState<MaterialGroup[]>([])
@@ -57,14 +32,8 @@ export function MaterialsProvider({ children }: { children: ReactNode }) {
     [groups]
   )
 
-  const refresh = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [list, lib] = await Promise.all([
-        fetchGroups(),
-        fetchLibrarySettings(),
-      ])
+  const applyData = useCallback(
+    (list: MaterialGroup[], lib: LibrarySettings) => {
       setGroups(list)
       setSettings(lib)
       setActiveGroupId((prev) => {
@@ -78,16 +47,45 @@ export function MaterialsProvider({ children }: { children: ReactNode }) {
         // default: select first group's materials
         return list[0]?.materials.map((m) => m.id) ?? []
       })
+    },
+    []
+  )
+
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [list, lib] = await Promise.all([
+        fetchGroups(),
+        fetchLibrarySettings(),
+      ])
+      applyData(list, lib)
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载素材失败")
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [applyData])
 
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    let cancelled = false
+    Promise.all([fetchGroups(), fetchLibrarySettings()])
+      .then(([list, lib]) => {
+        if (cancelled) return
+        applyData(list, lib)
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "加载素材失败")
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [applyData])
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) =>
@@ -205,12 +203,4 @@ export function MaterialsProvider({ children }: { children: ReactNode }) {
   return (
     <MaterialsContext.Provider value={value}>{children}</MaterialsContext.Provider>
   )
-}
-
-export function useMaterials() {
-  const ctx = useContext(MaterialsContext)
-  if (!ctx) {
-    throw new Error("useMaterials must be used within MaterialsProvider")
-  }
-  return ctx
 }

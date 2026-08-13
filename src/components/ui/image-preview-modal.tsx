@@ -35,6 +35,7 @@ export function ImagePreviewModal({
   const [scale, setScale] = useState(1)
   const [rotation, setRotation] = useState(0)
   const [copied, setCopied] = useState(false)
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen)
 
   // Normalize image list
   const normalizedImages: ImageItem[] = useMemo(() => {
@@ -43,14 +44,15 @@ export function ImagePreviewModal({
     )
   }, [images])
 
-  // Sync initialIndex when modal opens
-  useEffect(() => {
+  // 打开时重置视角状态：在渲染期间调整派生状态（React 推荐，替代 effect 同步）
+  if (isOpen !== prevIsOpen) {
+    setPrevIsOpen(isOpen)
     if (isOpen) {
       setCurrentIndex(Math.max(0, Math.min(initialIndex, images.length - 1)))
       setScale(1)
       setRotation(0)
     }
-  }, [isOpen, initialIndex, images.length])
+  }
 
   const currentImage = normalizedImages[currentIndex] || null
 

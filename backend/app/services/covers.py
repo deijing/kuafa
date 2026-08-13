@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import base64
 import html
 import threading
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from app.config import settings
 from app.models import CoverJobOut, CoverRequest, CoverResult, JobStatus
 from app.services import catsapi
 from app.services import db as store
+from app.services.ffmpeg_pipeline import run_cmd
 from app.services.secrets import get_secret
 
 STYLE_HINTS = {
@@ -160,11 +163,6 @@ class CoverJobManager:
 
 
 cover_jobs = CoverJobManager()
-
-
-import base64
-from pathlib import Path
-from app.services.ffmpeg_pipeline import run_cmd
 
 
 def extract_video_frame(video_path: Path, timestamp_sec: float, out_jpeg: Path) -> bool:

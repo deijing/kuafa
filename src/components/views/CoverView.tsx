@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Bot, Check, Images, Loader2, Sparkles, Wand2, ZoomIn } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -99,7 +99,7 @@ export function CoverView() {
 
   const { notify } = useNotifications()
 
-  const handleResetCover = () => {
+  const handleResetCover = useCallback(() => {
     setJob(null)
     setHeadline("")
     setError(null)
@@ -110,7 +110,7 @@ export function CoverView() {
       message: "文案与预览已重置，您可以重新输入爆款文案即时出图！",
       type: "info",
     })
-  }
+  }, [notify])
 
   useEffect(() => {
     const handleNewProject = () => {
@@ -118,7 +118,7 @@ export function CoverView() {
     }
     window.addEventListener("kuafa:new-project", handleNewProject)
     return () => window.removeEventListener("kuafa:new-project", handleNewProject)
-  }, [])
+  }, [handleResetCover])
 
   useEffect(() => {
     let alive = true

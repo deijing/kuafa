@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   CirclePlay,
   Download,
@@ -107,7 +107,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
 
   const { notify } = useNotifications()
 
-  const handleResetGenerator = () => {
+  const handleResetGenerator = useCallback(() => {
     userClearedRef.current = true
     setJob(null)
     setError(null)
@@ -117,7 +117,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
       message: "合成结果已清空，您可以重新勾选素材并实时开始一键混剪！",
       type: "info",
     })
-  }
+  }, [notify])
 
   useEffect(() => {
     const handleNewProject = () => {
@@ -125,7 +125,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
     }
     window.addEventListener("kuafa:new-project", handleNewProject)
     return () => window.removeEventListener("kuafa:new-project", handleNewProject)
-  }, [])
+  }, [handleResetGenerator])
 
   const countNum = useMemo(() => {
     const parsed = parseInt(countInput, 10)

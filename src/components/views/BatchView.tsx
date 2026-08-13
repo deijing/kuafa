@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   CheckCircle2,
   CirclePlay,
@@ -133,16 +133,20 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
 
   // 默认勾选第一个有素材的组；组列表变化时清掉已不存在的选中项
   useEffect(() => {
-    if (!groups.length) {
-      setSelectedGroupIds([])
-      return
-    }
-    setSelectedGroupIds((prev) => {
-      const valid = prev.filter((id) => groups.some((g) => g.id === id))
-      if (valid.length) return valid
-      const first = groups.find((g) => g.material_count > 0) ?? groups[0]
-      return first ? [first.id] : []
-    })
+    // 延迟到宏任务，避免在 effect 内同步触发 setState
+    const timer = window.setTimeout(() => {
+      if (!groups.length) {
+        setSelectedGroupIds([])
+        return
+      }
+      setSelectedGroupIds((prev) => {
+        const valid = prev.filter((id) => groups.some((g) => g.id === id))
+        if (valid.length) return valid
+        const first = groups.find((g) => g.material_count > 0) ?? groups[0]
+        return first ? [first.id] : []
+      })
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [groups])
 
   function toggleGroup(groupId: string) {
@@ -180,7 +184,7 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
   const coverStyle: CoverStyle = "yellow-red"
   const [exportingZip, setExportingZip] = useState(false)
 
-  const handleResetBatch = () => {
+  const handleResetBatch = useCallback(() => {
     userClearedRef.current = true
     setJobs([])
     setPreviewJobId(null)
@@ -192,7 +196,7 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
       message: "页面已重置！您可以勾选素材组、调整参数并随时开始新一轮实时批量生成。",
       type: "info",
     })
-  }
+  }, [notify])
 
   useEffect(() => {
     const handleNewProject = () => {
@@ -200,7 +204,7 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
     }
     window.addEventListener("kuafa:new-project", handleNewProject)
     return () => window.removeEventListener("kuafa:new-project", handleNewProject)
-  }, [])
+  }, [handleResetBatch])
 
   function toggleJobExportSelection(jobId: string) {
     setSelectedExportJobIds((prev) =>
@@ -328,7 +332,10 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
 
   useEffect(() => {
     if (!jobs.length || allDone) {
-      if (allDone) setBusy(false)
+      if (allDone) {
+        const doneTimer = window.setTimeout(() => setBusy(false), 0)
+        return () => window.clearTimeout(doneTimer)
+      }
       return
     }
     const timer = window.setInterval(() => {

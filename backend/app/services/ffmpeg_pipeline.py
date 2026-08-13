@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -154,13 +155,19 @@ class MediaInfo:
     has_audio: bool
 
 
-def run_cmd(args: list[str], *, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+def run_cmd(
+    args: list[str],
+    *,
+    timeout: int | None = None,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
         check=True,
         capture_output=True,
         text=True,
         timeout=timeout,
+        cwd=cwd,
     )
 
 

@@ -97,6 +97,7 @@ selected_ids 必须来自候选 id，按成片播放顺序排列；after_id 表�
         return None
 
     plan: list[EditClip] = []
+    plan_pool_ids: list[int] = []
     total = 0.0
     seen: set[int] = set()
     for item in selected_ids:
@@ -111,18 +112,18 @@ selected_ids 必须来自候选 id，按成片播放顺序排列；after_id 表�
         if total + dur > target_seconds * 1.2 and total >= target_seconds * 0.7:
             break
         plan.append(clip)
+        plan_pool_ids.append(idx)
         seen.add(idx)
         total += dur
 
     if not plan:
         return None
 
-    # 时间轴：按 plan 顺序累计
+    # 时间轴：按 plan 顺序累计（用 pool 内 id 精确反查，避免依赖对象身份）
     timeline_at: dict[int, float] = {}
     cursor = 0.0
     for i, clip in enumerate(plan):
-        # 找到该 clip 在 pool 中的 id
-        pool_id = next((pid for pid, c in id_map.items() if c is clip), i)
+        pool_id = plan_pool_ids[i]
         timeline_at[pool_id] = cursor
         cursor += max(0.2, clip.end - clip.start)
 

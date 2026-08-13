@@ -108,27 +108,31 @@ export function SettingsDialog() {
 
   useEffect(() => {
     if (!open) return
-    setLoading(true)
-    setError(null)
-    setOk(null)
-    setTestResult(null)
-    setCatsapiTestResult(null)
-    setModelOptions([])
-    setModelsFetched(false)
-    setCatsapiKey("")
-    setOpenaiKey("")
-    void fetchApiSecrets()
-      .then((data) => {
-        setStatus(data)
-        setCatsapiBase(data.catsapi_base)
-        setOpenaiBase(data.openai_base_url)
-        setOpenaiModel(data.openai_model)
-        setReasoningEffort(normalizeEffort(data.openai_reasoning_effort))
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : "加载设置失败")
-      })
-      .finally(() => setLoading(false))
+    // 延迟到宏任务，避免在 effect 内同步触发 setState 造成级联渲染
+    const timer = window.setTimeout(() => {
+      setLoading(true)
+      setError(null)
+      setOk(null)
+      setTestResult(null)
+      setCatsapiTestResult(null)
+      setModelOptions([])
+      setModelsFetched(false)
+      setCatsapiKey("")
+      setOpenaiKey("")
+      void fetchApiSecrets()
+        .then((data) => {
+          setStatus(data)
+          setCatsapiBase(data.catsapi_base)
+          setOpenaiBase(data.openai_base_url)
+          setOpenaiModel(data.openai_model)
+          setReasoningEffort(normalizeEffort(data.openai_reasoning_effort))
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "加载设置失败")
+        })
+        .finally(() => setLoading(false))
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [open])
 
   function catsapiProbePayload() {

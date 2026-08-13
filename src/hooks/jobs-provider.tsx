@@ -1,7 +1,5 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -10,19 +8,7 @@ import {
 } from "react"
 import { fetchJobs, type Job } from "@/lib/api"
 import { useNotifications } from "@/hooks/use-notifications"
-
-type JobsContextValue = {
-  jobs: Job[]
-  activeJobs: Job[]
-  hasActiveJobs: boolean
-  overallProgress: number
-  loading: boolean
-  error: string | null
-  refreshJobs: () => Promise<Job[]>
-  registerJobs: (newJobs: Job[]) => void
-}
-
-const JobsContext = createContext<JobsContextValue | null>(null)
+import { JobsContext } from "@/hooks/use-jobs"
 
 export function JobsProvider({ children }: { children: ReactNode }) {
   const [jobs, setJobs] = useState<Job[]>([])
@@ -106,17 +92,33 @@ export function JobsProvider({ children }: { children: ReactNode }) {
 
   // 后台持续轮询
   useEffect(() => {
-    // 首次加载
-    void refreshJobs()
+    let cancelled = false
+
+    // 首次加载：在异步回调中 setState，避免 effect 内同步 setState
+    fetchJobs()
+      .then((list) => {
+        if (cancelled) return
+        setJobs(list)
+        setError(null)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : "获取任务状态失败")
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
 
     // 动态调整轮询间隔：如果有在跑的任务，1.5 秒更新一次；没有则 6 秒巡检一次
     const intervalMs = hasActiveJobs ? 1500 : 6000
-
     const timer = window.setInterval(() => {
       void refreshJobs()
     }, intervalMs)
 
-    return () => window.clearInterval(timer)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
   }, [hasActiveJobs, refreshJobs])
 
   const value = useMemo(
@@ -143,12 +145,4 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   )
 
   return <JobsContext.Provider value={value}>{children}</JobsContext.Provider>
-}
-
-export function useJobs() {
-  const ctx = useContext(JobsContext)
-  if (!ctx) {
-    throw new Error("useJobs must be used within JobsProvider")
-  }
-  return ctx
 }

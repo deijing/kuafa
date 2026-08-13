@@ -76,7 +76,11 @@ export function EnvCheckDialog({
   }, [onPassStateChange, isControlled])
 
   useEffect(() => {
-    void runCheck()
+    // 延迟到下一个宏任务，避免在 effect 内同步触发 setState
+    const timer = window.setTimeout(() => {
+      void runCheck()
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [runCheck])
 
   function handleCopy(text: string, id: string) {

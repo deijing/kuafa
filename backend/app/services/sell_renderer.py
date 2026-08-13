@@ -323,24 +323,24 @@ def render_sell_video(
             82,
             "烧录字幕与神奇大字动效…" if magic_cues else "烧录口播字幕…",
         )
-        ass = write_ass_subtitles(
+        write_ass_subtitles(
             clips if add_subtitles else [],
             work / "subs.ass",
             magic_cues=magic_cues,
             speech_speed=speech_speed,
             subtitle_position=subtitle_position,
         )
-        # Escape path for ffmpeg subtitles filter on macOS & Windows
-        ass_esc = str(ass.resolve()).replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
+        # 在 work 目录内用相对文件名跑 ffmpeg，规避 subtitles 滤镜对
+        # 绝对路径里的特殊字符（空格/单引号/中文/盘符）转义出错的问题。
         subtitled = work / "subtitled.mp4"
         run_cmd(
             [
                 settings.ffmpeg_bin,
                 "-y",
                 "-i",
-                str(current),
+                current.name,
                 "-vf",
-                f"subtitles='{ass_esc}'",
+                "subtitles=subs.ass",
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -351,9 +351,10 @@ def render_sell_video(
                 "copy",
                 "-movflags",
                 "+faststart",
-                str(subtitled),
+                subtitled.name,
             ],
             timeout=300,
+            cwd=work,
         )
         current = subtitled
 

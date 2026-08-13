@@ -20,6 +20,7 @@ from typing import Literal, Optional
 import requests
 from pydantic import BaseModel
 
+from app.config import settings
 from app.services.ffmpeg_pipeline import run_cmd
 
 logger = logging.getLogger(__name__)
@@ -123,7 +124,7 @@ def extract_audio_aac(media_file: Path) -> bytes:
     try:
         run_cmd(
             [
-                "ffmpeg",
+                settings.ffmpeg_bin,
                 "-y",
                 "-i",
                 str(media_file),
