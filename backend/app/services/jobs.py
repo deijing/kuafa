@@ -99,6 +99,11 @@ class JobManager:
             if work_dir.is_relative_to(work_root) and work_dir.is_dir():
                 shutil.rmtree(work_dir, ignore_errors=True)
 
+            covers_dir = (settings.covers_dir / job_id).resolve()
+            covers_root = settings.covers_dir.resolve()
+            if covers_dir.is_relative_to(covers_root) and covers_dir.is_dir():
+                shutil.rmtree(covers_dir, ignore_errors=True)
+
             store.delete_generate_job(job_id)
             return job
 
