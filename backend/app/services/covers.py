@@ -281,6 +281,7 @@ def generate_video_covers(
     - 如果配置了 CatsAPI 密钥：带入成片商品名称与场景结合 AI 渲染封面。
     """
     text = (headline or "").strip() or "爆款推荐 独家折扣"
+    target_count = 3
     results: list[CoverResult] = []
     out_dir = settings.covers_dir / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -290,17 +291,17 @@ def generate_video_covers(
     # 1. 尝试从成片视频中截取画面首帧/高光帧
     extracted_frames: list[Path] = []
     if v_path and v_path.exists():
-        timestamps = [1.5, 3.5, 6.0, 9.0]
-        for idx, ts in enumerate(timestamps[:count]):
+        timestamps = [1.5, 3.5, 6.0]
+        for idx, ts in enumerate(timestamps):
             frame_path = out_dir / f"frame_src_{idx + 1}.jpg"
             if extract_video_frame(v_path, ts, frame_path):
                 extracted_frames.append(frame_path)
 
-    # 2. 如果配置了 AI 接口，带入商品与成片真实卖点 Prompt
+    # 2. 如果配置了 AI 接口，带入商品与成片真实卖点 Prompt 渲染纯 AI 美化海报
     api_key = get_secret("catsapi_key", settings.catsapi_key)
     if api_key:
         try:
-            for i in range(min(count, 4)):
+            for i in range(target_count):
                 style_prompt = STYLE_HINTS.get(style, STYLE_HINTS["yellow-red"])
                 angle = VARIANT_ANGLES[i % len(VARIANT_ANGLES)]
                 prod_desc = f"商品类别与主题：「{group_name}」。" if group_name else ""
@@ -330,10 +331,10 @@ def generate_video_covers(
         except Exception:
             pass
 
-    # 3. 关联真实成片图底的高清矢量大字报封面
-    if len(results) < count:
+    # 3. 若无 AI 密钥或 AI 接口异常，关联真实成片图底的高清大字报封面
+    if len(results) < target_count:
         start_idx = len(results)
-        for i in range(start_idx, count):
+        for i in range(start_idx, target_count):
             filename = f"cover_{i + 1:02d}.svg"
             dest = out_dir / filename
             frame_img = extracted_frames[i % len(extracted_frames)] if extracted_frames else None
@@ -353,4 +354,4 @@ def generate_video_covers(
                 )
             )
 
-    return results
+    return results[:3]

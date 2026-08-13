@@ -126,14 +126,14 @@ class CoverStyle(str, Enum):
 class CoverRequest(BaseModel):
     headline: str = Field(min_length=1, max_length=120)
     style: CoverStyle = CoverStyle.yellow_red
-    count: int = Field(default=4, ge=1, le=6)
+    count: int = Field(default=3, ge=1, le=3)
     mode: Literal["ai", "template"] = "ai"
 
 
 class JobCoverRequest(BaseModel):
     headline: str | None = None
     style: CoverStyle = CoverStyle.yellow_red
-    count: int = Field(default=4, ge=1, le=6)
+    count: int = Field(default=3, ge=1, le=3)
 
 
 class JobExportZipRequest(BaseModel):

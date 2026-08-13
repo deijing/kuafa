@@ -340,7 +340,7 @@ class JobManager:
                     job_id=job_id,
                     video_path=out_path,
                     group_name=group_name,
-                    count=2,
+                    count=3,
                 )
             except Exception:
                 covers = []
@@ -378,7 +378,7 @@ class JobManager:
         self,
         job_id: str,
         headline: str | None = None,
-        count: int = 4,
+        count: int = 3,
         style: str = "yellow-red",
     ) -> JobOut:
         # 1. 仅在获取任务记录时获取锁
@@ -400,17 +400,16 @@ class JobManager:
             job_id=job_id,
             video_path=video_path,
             group_name=group_name,
-            count=count,
+            count=3,
             style=style,
         )
 
-        # 3. 更新数据库记录时再次加锁
+        # 3. 更新数据库记录时再次加锁（统一只保留 3 张全新封面）
         with self._lock:
             job = store.get_generate_job(job_id)
             if not job:
                 raise KeyError("任务不存在")
-            existing = job.covers or []
-            updated_covers = new_covers + existing
+            updated_covers = new_covers[:3]
             updated_job = job.model_copy(
                 update={
                     "headline": target_headline,

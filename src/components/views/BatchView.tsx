@@ -275,11 +275,11 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
   async function handleGenerateCoversForJob(jobId: string, headline?: string) {
     setCoverLoadingJobId(jobId)
     try {
-      const updated = await generateJobCovers(jobId, headline, 4, coverStyle)
+      const updated = await generateJobCovers(jobId, headline, 3, coverStyle)
       setJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)))
       notify({
         title: "配套爆款封面生成完成",
-        message: "已为该成片扩充生成 4 张爆款大字报封面！",
+        message: "已为该成片重构生成 3 张高颜值爆款封面！",
         type: "success",
       })
     } catch (err) {
@@ -299,14 +299,14 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
     setBusy(true)
     try {
       const updatedList = await Promise.all(
-        doneJobs.map((j) => generateJobCovers(j.id, j.headline ?? undefined, 2, coverStyle))
+        doneJobs.map((j) => generateJobCovers(j.id, j.headline ?? undefined, 3, coverStyle))
       )
       setJobs((prev) =>
         prev.map((j) => updatedList.find((u) => u.id === j.id) ?? j)
       )
       notify({
         title: "全套爆款封面生成完成",
-        message: `已成功为 ${updatedList.length} 条成片生成配套大字报封面！`,
+        message: `已成功为 ${updatedList.length} 条成片生成 3 张配套高颜值封面！`,
         type: "success",
       })
     } catch (err) {
@@ -1252,7 +1252,7 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
                                 {isCoverLoading ? (
                                   <Loader2 className="size-3 animate-spin text-blue-600" />
                                 ) : null}
-                                + 补全封面
+                                重新生成 3 张封面
                               </button>
                             </div>
                             <div className="flex items-center gap-1.5 overflow-x-auto py-1">
