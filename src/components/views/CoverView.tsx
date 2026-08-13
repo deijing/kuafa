@@ -96,6 +96,29 @@ export function CoverView() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const { notify } = useNotifications()
+
+  const handleResetCover = () => {
+    setJob(null)
+    setHeadline("")
+    setError(null)
+    setSelectedId(null)
+    setBusy(false)
+    notify({
+      title: "已新建封面页面",
+      message: "文案与预览已重置，您可以重新输入爆款文案即时出图！",
+      type: "info",
+    })
+  }
+
+  useEffect(() => {
+    const handleNewProject = () => {
+      handleResetCover()
+    }
+    window.addEventListener("kuafa:new-project", handleNewProject)
+    return () => window.removeEventListener("kuafa:new-project", handleNewProject)
+  }, [])
+
   useEffect(() => {
     let alive = true
     void fetchCoverJobs()
@@ -109,8 +132,6 @@ export function CoverView() {
       alive = false
     }
   }, [job?.status])
-
-  const { notify } = useNotifications()
 
   useEffect(() => {
     if (!job || (job.status !== "queued" && job.status !== "running")) return

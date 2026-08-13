@@ -9,9 +9,10 @@ import { useNotifications } from "@/hooks/use-notifications"
 
 type AppHeaderProps = {
   title: string
+  onNewProject?: () => void
 }
 
-export function AppHeader({ title }: AppHeaderProps) {
+export function AppHeader({ title, onNewProject }: AppHeaderProps) {
   const { theme, setTheme } = useTheme()
   const isDark = theme === "dark"
 
@@ -43,6 +44,14 @@ export function AppHeader({ title }: AppHeaderProps) {
     setOpenNotifications((prev) => !prev)
     if (!openNotifications && unreadCount > 0) {
       markAllAsRead()
+    }
+  }
+
+  const handleNewProjectClick = () => {
+    if (onNewProject) {
+      onNewProject()
+    } else {
+      window.dispatchEvent(new CustomEvent("kuafa:new-project"))
     }
   }
 
@@ -176,7 +185,10 @@ export function AppHeader({ title }: AppHeaderProps) {
 
         <EnvCheckDialog />
         <SettingsDialog />
-        <Button className="rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white shadow-xs hover:shadow-md transition-all active:scale-[0.98] font-medium text-xs md:text-sm px-4 py-2 cursor-pointer border-none">
+        <Button
+          onClick={handleNewProjectClick}
+          className="rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white shadow-xs hover:shadow-md transition-all active:scale-[0.98] font-medium text-xs md:text-sm px-4 py-2 cursor-pointer border-none"
+        >
           <Plus data-icon="inline-start" className="size-4 mr-1" />
           新建项目
         </Button>

@@ -9,8 +9,10 @@ import { GeneratorView } from "@/components/views/GeneratorView"
 import { HistoryView } from "@/components/views/HistoryView"
 import { LibraryView } from "@/components/views/LibraryView"
 import { ToastContainer } from "@/components/layout/ToastContainer"
+import { ActiveJobBanner } from "@/components/layout/ActiveJobBanner"
 import { MaterialsProvider } from "@/hooks/use-materials"
 import { NotificationProvider } from "@/hooks/use-notifications"
+import { JobsProvider } from "@/hooks/use-jobs"
 import { PATH_TO_TAB, TAB_PATHS, TAB_TITLES } from "@/types/nav"
 
 export function App() {
@@ -18,15 +20,30 @@ export function App() {
   const navigate = useNavigate()
   const activeTab = PATH_TO_TAB[location.pathname] ?? "dashboard"
 
+  const handleNewProject = () => {
+    if (
+      location.pathname !== TAB_PATHS.batch &&
+      location.pathname !== TAB_PATHS.generator &&
+      location.pathname !== TAB_PATHS.cover
+    ) {
+      navigate(TAB_PATHS.batch)
+    }
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("kuafa:new-project"))
+    }, 50)
+  }
+
   return (
     <NotificationProvider>
-      <MaterialsProvider>
-        <div className="flex h-screen overflow-hidden bg-background">
-          <ToastContainer />
-        <AppSidebar />
-        <main className="relative flex h-full flex-1 flex-col overflow-hidden bg-background">
-          <AppHeader title={TAB_TITLES[activeTab]} />
-          <div className="flex-1 overflow-y-auto p-8">
+      <JobsProvider>
+        <MaterialsProvider>
+          <div className="flex h-screen overflow-hidden bg-background">
+            <ToastContainer />
+            <AppSidebar />
+            <main className="relative flex h-full flex-1 flex-col overflow-hidden bg-background">
+              <AppHeader title={TAB_TITLES[activeTab]} onNewProject={handleNewProject} />
+              <ActiveJobBanner />
+              <div className="flex-1 overflow-y-auto p-8">
             <Routes>
               <Route
                 path={TAB_PATHS.dashboard}
@@ -51,13 +68,17 @@ export function App() {
                 element={
                   <GeneratorView
                     onGoLibrary={() => navigate(TAB_PATHS.library)}
+                    onGoHistory={() => navigate(TAB_PATHS.history)}
                   />
                 }
               />
               <Route
                 path={TAB_PATHS.batch}
                 element={
-                  <BatchView onGoLibrary={() => navigate(TAB_PATHS.library)} />
+                  <BatchView
+                    onGoLibrary={() => navigate(TAB_PATHS.library)}
+                    onGoHistory={() => navigate(TAB_PATHS.history)}
+                  />
                 }
               />
               <Route path={TAB_PATHS.cover} element={<CoverView />} />
@@ -71,6 +92,7 @@ export function App() {
         </main>
       </div>
     </MaterialsProvider>
+      </JobsProvider>
     </NotificationProvider>
   )
 }

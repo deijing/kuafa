@@ -3,10 +3,12 @@ import {
   CheckCircle2,
   CirclePlay,
   Download,
+  History,
   Info,
   Layers,
   Loader2,
   Music,
+  Plus,
   SlidersHorizontal,
   Upload,
   Volume2,
@@ -29,14 +31,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { extractRules } from "@/data/extract-rules"
 import { useMaterials } from "@/hooks/use-materials"
 import { useNotifications } from "@/hooks/use-notifications"
+import { useJobs } from "@/hooks/use-jobs"
 import {
   createBatchJobs,
   exportJobsZip,
-  fetchJob,
   fetchJobs,
   generateJobCovers,
   uploadBgm,
@@ -49,10 +50,12 @@ import { cn } from "@/lib/utils"
 
 type BatchViewProps = {
   onGoLibrary?: () => void
+  onGoHistory?: () => void
 }
 
-export function BatchView({ onGoLibrary }: BatchViewProps) {
+export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
   const { groups, loading } = useMaterials()
+  const { registerJobs } = useJobs()
 
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
   const [countInput, setCountInput] = useState<string>("3")
@@ -75,6 +78,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [previewJobId, setPreviewJobId] = useState<string | null>(null)
+  const userClearedRef = useRef(false)
 
   const selectedGroups = useMemo(
     () => groups.filter((g) => selectedGroupIds.includes(g.id)),
@@ -156,8 +160,30 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
 
   const [coverLoadingJobId, setCoverLoadingJobId] = useState<string | null>(null)
   const [selectedExportJobIds, setSelectedExportJobIds] = useState<string[]>([])
-  const [coverStyle, setCoverStyle] = useState<CoverStyle>("yellow-red")
+  const coverStyle: CoverStyle = "yellow-red"
   const [exportingZip, setExportingZip] = useState(false)
+
+  const handleResetBatch = () => {
+    userClearedRef.current = true
+    setJobs([])
+    setPreviewJobId(null)
+    setError(null)
+    setSelectedExportJobIds([])
+    setBusy(false)
+    notify({
+      title: "已新建批量生成页面",
+      message: "页面已重置！您可以勾选素材组、调整参数并随时开始新一轮实时批量生成。",
+      type: "info",
+    })
+  }
+
+  useEffect(() => {
+    const handleNewProject = () => {
+      handleResetBatch()
+    }
+    window.addEventListener("kuafa:new-project", handleNewProject)
+    return () => window.removeEventListener("kuafa:new-project", handleNewProject)
+  }, [])
 
   function toggleJobExportSelection(jobId: string) {
     setSelectedExportJobIds((prev) =>
@@ -195,12 +221,13 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
     }
   }
 
-  // 页面加载/从其他标签切回时：自动恢复最近成片记录
+  // 页面加载/从其他标签切回时：自动恢复最近成片记录（如果用户未手动点击新建）
   useEffect(() => {
     let mounted = true
+    if (userClearedRef.current) return
     void fetchJobs()
       .then((allJobs) => {
-        if (!mounted || jobs.length > 0) return
+        if (!mounted || jobs.length > 0 || userClearedRef.current) return
         if (!allJobs || !allJobs.length) return
         const recent = allJobs.filter(
           (j) => j.status === "succeeded" || j.status === "running" || j.status === "queued"
@@ -212,6 +239,10 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
           const toShow = groupMatched.length > 0 ? groupMatched : recent.slice(0, 20)
           if (toShow.length > 0) {
             setJobs(toShow)
+            registerJobs(toShow)
+            if (toShow.some((j) => j.status === "running" || j.status === "queued")) {
+              setBusy(true)
+            }
             const succeeded = toShow.filter((j) => j.status === "succeeded")
             setSelectedExportJobIds(succeeded.map((j) => j.id))
             const firstOk = succeeded.find((j) => j.output_url)
@@ -223,7 +254,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
     return () => {
       mounted = false
     }
-  }, [selectedGroupIds])
+  }, [selectedGroupIds, jobs.length, registerJobs])
 
   async function handleGenerateCoversForJob(jobId: string, headline?: string) {
     setCoverLoadingJobId(jobId)
@@ -342,6 +373,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
       setError("所选素材组没有素材，请先到素材库上传")
       return
     }
+    userClearedRef.current = false
     setError(null)
     setBusy(true)
     setJobs([])
@@ -371,7 +403,9 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
           })
         )
       )
-      setJobs(results.flatMap((r) => r.jobs))
+      const createdList = results.flatMap((r) => r.jobs)
+      setJobs(createdList)
+      registerJobs(createdList)
     } catch (err) {
       setBusy(false)
       setError(err instanceof Error ? err.message : "创建批量任务失败")
@@ -388,16 +422,30 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
       ? 0
       : Math.round(jobs.reduce((sum, j) => sum + j.progress, 0) / jobs.length)
 
-  return (
-    <div className="flex h-full gap-7">
-      <Card className="flex h-full w-[380px] shrink-0 flex-col overflow-y-auto rounded-2xl border border-black/[0.04] dark:border-slate-800 bg-white dark:bg-slate-900 shadow-[0_4px_6px_-1px_rgba(0,0,0,0.02),0_10px_15px_-3px_rgba(0,0,0,0.03),0_20px_25px_-5px_rgba(0,0,0,0.02)]">
-        <CardHeader className="py-5 px-6 border-b border-[#F3F4F6] dark:border-slate-800">
-          <CardTitle className="flex items-center gap-2 text-base font-semibold text-[#111827] dark:text-slate-100">
+    return (
+    <div className="flex h-full gap-7 overflow-hidden">
+      {/* Left Column: Fixed height card with scrollable settings and sticky CTA footer */}
+      <Card className="flex h-full w-[380px] shrink-0 flex-col overflow-hidden rounded-2xl border border-black/[0.06] dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs">
+        <CardHeader className="py-4 px-6 border-b border-slate-100 dark:border-slate-800 flex flex-row items-center justify-between shrink-0">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
             <SlidersHorizontal className="size-4 text-blue-600" />
             批量成片设置
           </CardTitle>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={handleResetBatch}
+            disabled={busy}
+            className="h-7 text-xs font-semibold text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-lg cursor-pointer gap-1"
+          >
+            <Plus className="size-3.5" />
+            新建页面
+          </Button>
         </CardHeader>
-        <CardContent className="flex flex-1 flex-col justify-between p-6">
+
+        {/* Scrollable Form Body */}
+        <CardContent className="flex-1 overflow-y-auto p-6 space-y-6">
           <div className="flex flex-col">
             <div>
               <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -449,70 +497,33 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                           disabled={busy || empty}
                           onClick={() => toggleGroup(group.id)}
                           className={cn(
-                            "flex w-full items-start gap-2.5 rounded-lg p-2.5 text-left transition-all border",
+                            "flex items-center justify-between rounded-lg px-3 py-2 text-left transition-colors cursor-pointer",
                             active
-                              ? "bg-blue-50/90 dark:bg-blue-950/60 border-blue-100/90 dark:border-blue-900/50 shadow-2xs"
-                              : "border-transparent hover:bg-white dark:hover:bg-slate-800/60",
-                            empty && "opacity-45 cursor-not-allowed",
-                            !empty && !busy && "cursor-pointer"
+                              ? "bg-blue-50/80 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900"
+                              : "hover:bg-slate-100/60 dark:hover:bg-slate-800/60 border border-transparent",
+                            empty && "opacity-40 cursor-not-allowed"
                           )}
                         >
-                          <Checkbox
-                            checked={active}
-                            disabled={busy || empty}
-                            className="mt-0.5 rounded-[4px] border-slate-300 dark:border-slate-600 data-checked:bg-blue-600 data-checked:border-blue-600 pointer-events-none"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center justify-between gap-2">
-                              <span
-                                className={cn(
-                                  "truncate text-xs",
-                                  active
-                                    ? "font-semibold text-blue-900 dark:text-blue-200"
-                                    : "font-medium text-slate-700 dark:text-slate-300"
-                                )}
-                              >
-                                {group.name}
-                              </span>
-                              <span
-                                className={cn(
-                                  "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                                  active
-                                    ? "bg-blue-100/90 text-blue-700 dark:bg-blue-900/80 dark:text-blue-200"
-                                    : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"
-                                )}
-                              >
-                                {group.material_count}
-                              </span>
-                            </div>
-                            <p
-                              className={cn(
-                                "mt-0.5 truncate text-[11px]",
-                                active
-                                  ? "text-blue-600/70 dark:text-blue-400/70"
-                                  : "text-slate-400 dark:text-slate-500"
-                              )}
-                              title={group.path}
-                            >
-                              {group.path}
-                            </p>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Checkbox
+                              checked={active}
+                              onCheckedChange={() => toggleGroup(group.id)}
+                              disabled={busy || empty}
+                              className="rounded-[4px] border-slate-300 dark:border-slate-700 data-checked:bg-blue-600 data-checked:border-blue-600"
+                            />
+                            <span className="truncate text-xs font-semibold text-[#111827] dark:text-slate-200">
+                              {group.name}
+                            </span>
                           </div>
+                          <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-slate-200/60 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                            {group.material_count}
+                          </span>
                         </button>
                       )
                     })}
                   </div>
                 )}
               </div>
-              {selectedGroups.length ? (
-                <p className="mt-2 text-[12px] text-[#9CA3AF]">
-                  已选 {selectedGroups.length} 组 · {totalClips} 段素材
-                  {totalVideos > 0 ? ` · 将生成 ${totalVideos} 条成片` : ""}
-                </p>
-              ) : (
-                <p className="mt-2 text-[12px] text-[#9CA3AF]">
-                  请勾选要批量制作的素材组
-                </p>
-              )}
             </div>
 
             <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
@@ -527,7 +538,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                 </span>
               </div>
               <p className="mb-3 text-[13px] text-[#9CA3AF] dark:text-slate-400 leading-relaxed">
-                每个已选素材组将各自生成此数量的差异化防重成片，可自由输入条数（1~50条）。
+                每个已选素材组将各自生成此数量的差异化防重成片（1~50条）。
               </p>
               
               <div className="flex flex-col gap-2.5">
@@ -654,29 +665,22 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                   </div>
                 </div>
               )}
-
-              <p className="mt-2 text-[12px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200/60 dark:border-amber-900/40 rounded-lg p-2 leading-relaxed">
-                💡 <strong>素材建议：</strong>素材较少（3~4个视频）推荐选 <strong>60秒</strong>；素材较多推荐选 <strong>40秒/45秒</strong>。
-              </p>
             </div>
 
-            {/* Divider */}
             <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
 
-            {/* Section: 语速与开头防重 */}
             <div>
               <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-2.5">
                 语速倍率 & 开头防重
               </h4>
               <div className="flex flex-col gap-3">
-                {/* 语速调节 */}
                 <div className="flex items-center justify-between py-1 px-1">
                   <div className="flex flex-col gap-0.5">
                     <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
                       口播语速倍率
                     </span>
                     <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
-                      加速不改变音调（推荐 1.1x 快节奏）
+                      加速不改变音调（推荐 1.1x）
                     </span>
                   </div>
                   <Select
@@ -697,14 +701,13 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                   </Select>
                 </div>
 
-                {/* 开头防重 */}
                 <div className="flex items-center justify-between py-1 px-1">
                   <div className="flex flex-col gap-0.5">
                     <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
                       开头随机防重
                     </span>
                     <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
-                      不同主播/多次生成随机换 Hook 开头
+                      多次生成随机换 Hook 开头
                     </span>
                   </div>
                   <Switch
@@ -720,17 +723,14 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
 
             <div>
               <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-2.5">
-                字幕 / 音乐 / 画幅
+                字幕与 BGM 音乐
               </h4>
               <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between py-1 px-1">
                   <div className="flex flex-col gap-0.5">
-                      <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
-                        口播字幕（烧录）
-                      </span>
-                      <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
-                        逐段弹出，每段不超过 10 字、不换行
-                      </span>
+                    <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
+                      口播字幕（烧录）
+                    </span>
                   </div>
                   <Switch
                     checked={addSubtitles}
@@ -745,9 +745,6 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                       <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
                         字幕显示位置
                       </span>
-                      <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
-                        靠上安全区避开抖音/小红书底部UI
-                      </span>
                     </div>
                     <Select
                       value={subtitlePosition}
@@ -758,7 +755,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                         <SelectValue placeholder="位置" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="high">靠上安全区 (推荐)</SelectItem>
+                        <SelectItem value="high">靠上安全区</SelectItem>
                         <SelectItem value="mid">居中偏下</SelectItem>
                         <SelectItem value="low">贴近底部</SelectItem>
                       </SelectContent>
@@ -773,9 +770,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                         背景音乐
                       </span>
                       <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
-                        {customBgm
-                          ? `音频: ${customBgm.filename}`
-                          : "自动匹配热度 BGM 或自定义音频"}
+                        {customBgm ? `音频: ${customBgm.filename}` : "自动匹配热度 BGM"}
                       </span>
                     </div>
                     <Switch
@@ -859,43 +854,40 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                     </div>
                   ) : null}
                 </div>
-
-                <div className="mt-2 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 p-3.5 text-[13px] text-[#4B5563] dark:text-slate-300 leading-relaxed flex items-start gap-2.5">
-                  <Info className="size-4 text-blue-600 shrink-0 mt-0.5" />
-                  <div>
-                    输出固定{" "}
-                    <strong className="text-[#111827] dark:text-slate-100 font-semibold">
-                      9:16 · 1080×1920
-                    </strong>
-                    。AI 全程介入：必剪 ASR → DeepSeek 主观选句 → 自动剪辑；成片带 ≤10
-                    字字幕与神奇大字动效。
-                  </div>
-                </div>
               </div>
             </div>
           </div>
-
-          <div className="pt-6">
-            {error ? <p className="mb-2 text-xs text-destructive">{error}</p> : null}
-
-            <Button
-              className="h-11 w-full rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-medium text-sm shadow-[0_4px_14px_0_rgba(37,99,235,0.35)] transition-all active:scale-[0.99] cursor-pointer flex items-center justify-center gap-2"
-              disabled={busy || !selectedGroups.length || totalClips === 0}
-              onClick={() => void startBatch()}
-            >
-              {busy ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <WandSparkles className="size-4" />
-              )}
-              {busy
-                ? `批量处理中… ${overallProgress}%`
-                : totalVideos > 0
-                  ? `一键成片 · ${selectedGroups.length} 组 × ${countNum} 条`
-                  : "一键成片"}
-            </Button>
-          </div>
         </CardContent>
+
+        {/* Sticky Action Footer */}
+        <div className="p-5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/90 backdrop-blur-xs flex flex-col gap-2.5 shrink-0">
+          {selectedGroups.length ? (
+            <p className="text-center text-xs font-medium text-slate-500 dark:text-slate-400">
+              已选 <strong className="text-blue-600 dark:text-blue-400 font-bold">{selectedGroups.length}</strong> 组 · <strong className="text-slate-700 dark:text-slate-300">{totalClips}</strong> 段素材 · 将生成 <strong className="text-blue-600 dark:text-blue-400 font-bold">{totalVideos}</strong> 条成片
+            </p>
+          ) : (
+            <p className="text-center text-xs text-slate-400">请先勾选要制作的素材组</p>
+          )}
+
+          {error ? <p className="text-center text-xs text-rose-500 font-medium">{error}</p> : null}
+
+          <Button
+            className="h-11 w-full rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold text-sm shadow-[0_4px_14px_0_rgba(37,99,235,0.35)] transition-all active:scale-[0.99] cursor-pointer flex items-center justify-center gap-2 border-none"
+            disabled={busy || !selectedGroups.length || totalClips === 0}
+            onClick={() => void startBatch()}
+          >
+            {busy ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <WandSparkles className="size-4" />
+            )}
+            {busy
+              ? `批量处理中… ${overallProgress}%`
+              : totalVideos > 0
+                ? `一键成片 · ${selectedGroups.length} 组 × ${countNum} 条`
+                : "一键成片"}
+          </Button>
+        </div>
       </Card>
 
       <div className="flex min-w-0 flex-1 flex-col gap-6">
@@ -906,13 +898,25 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                 ? `已选 ${selectedGroups.length} 组 · ${totalClips} 段素材`
                 : "勾选素材组后预览素材"}
             </CardTitle>
-            <button
-              type="button"
-              className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 cursor-pointer transition-colors"
-              onClick={onGoLibrary}
-            >
-              去素材库管理
-            </button>
+            <div className="flex items-center gap-3">
+              {onGoHistory && (
+                <button
+                  type="button"
+                  className="text-xs font-medium text-slate-600 hover:text-blue-600 dark:text-slate-400 cursor-pointer transition-colors flex items-center gap-1"
+                  onClick={onGoHistory}
+                >
+                  <History className="size-3.5" />
+                  查看成片历史
+                </button>
+              )}
+              <button
+                type="button"
+                className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 cursor-pointer transition-colors"
+                onClick={onGoLibrary}
+              >
+                去素材库管理
+              </button>
+            </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-3.5 p-5">
             <div className="relative flex items-center overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 p-4">

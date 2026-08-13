@@ -3,9 +3,11 @@ import {
   CirclePlay,
   Download,
   Film,
+  History,
   Info,
   Loader2,
   Music,
+  Plus,
   SlidersHorizontal,
   Upload,
   Volume2,
@@ -29,11 +31,11 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { useMaterials } from "@/hooks/use-materials"
 import { useNotifications } from "@/hooks/use-notifications"
+import { useJobs } from "@/hooks/use-jobs"
 import {
   createGenerateJob,
   fetchJob,
   fetchJobs,
-  generateJobCovers,
   uploadBgm,
   type BgmItem,
   type DurationPreference,
@@ -52,10 +54,12 @@ const tones = [
 
 type GeneratorViewProps = {
   onGoLibrary?: () => void
+  onGoHistory?: () => void
 }
 
-export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
+export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) {
   const { materials, selectedIds, groups, activeGroupId } = useMaterials()
+  const { registerJobs } = useJobs()
   const selected = useMemo(
     () => materials.filter((m) => selectedIds.includes(m.id)),
     [materials, selectedIds]
@@ -84,8 +88,29 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
   const [job, setJob] = useState<Job | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const userClearedRef = useRef(false)
 
   const { notify } = useNotifications()
+
+  const handleResetGenerator = () => {
+    userClearedRef.current = true
+    setJob(null)
+    setError(null)
+    setBusy(false)
+    notify({
+      title: "已新建生成页面",
+      message: "合成结果已清空，您可以重新勾选素材并实时开始一键混剪！",
+      type: "info",
+    })
+  }
+
+  useEffect(() => {
+    const handleNewProject = () => {
+      handleResetGenerator()
+    }
+    window.addEventListener("kuafa:new-project", handleNewProject)
+    return () => window.removeEventListener("kuafa:new-project", handleNewProject)
+  }, [])
 
   const countNum = useMemo(() => {
     const parsed = parseInt(countInput, 10)
@@ -109,24 +134,30 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
     return "mid"
   }, [durationKey])
 
-  // 页面加载/标签切回时：自动恢复上一次成片状态
+  // 页面加载/标签切回时：自动恢复上一次成片状态（若用户未手动点击新建）
   useEffect(() => {
     let mounted = true
-    if (!job) {
+    if (!job && !userClearedRef.current) {
       void fetchJobs()
         .then((allJobs) => {
-          if (!mounted) return
+          if (!mounted || userClearedRef.current) return
           const recent = allJobs.find(
             (j) => j.status === "succeeded" || j.status === "running" || j.status === "queued"
           )
-          if (recent) setJob(recent)
+          if (recent) {
+            setJob(recent)
+            registerJobs([recent])
+            if (recent.status === "running" || recent.status === "queued") {
+              setBusy(true)
+            }
+          }
         })
         .catch(() => {/* ignore */})
     }
     return () => {
       mounted = false
     }
-  }, [job])
+  }, [job, registerJobs])
 
   useEffect(() => {
     if (!job || (job.status !== "queued" && job.status !== "running")) {
@@ -178,6 +209,7 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
       setError("请先在素材库勾选切片")
       return
     }
+    userClearedRef.current = false
     setError(null)
     setBusy(true)
     setJob(null)
@@ -206,6 +238,7 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
           title: baseTitle,
         })
         setJob(created)
+        registerJobs([created])
       } else {
         const createdJobs = await Promise.all(
           Array.from({ length: countNum }).map((_, i) =>
@@ -230,7 +263,10 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
             })
           )
         )
-        if (createdJobs.length) setJob(createdJobs[0])
+        if (createdJobs.length) {
+          setJob(createdJobs[0])
+          registerJobs(createdJobs)
+        }
       }
     } catch (err) {
       setBusy(false)
@@ -244,16 +280,27 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
   const showFailed = job?.status === "failed"
 
   return (
-    <div className="flex h-full gap-7">
-      {/* Settings Column - Paper Card floating on Canvas */}
-      <Card className="flex h-full w-[380px] shrink-0 flex-col overflow-y-auto rounded-2xl border border-black/[0.04] dark:border-slate-800 bg-white dark:bg-slate-900 shadow-[0_4px_6px_-1px_rgba(0,0,0,0.02),0_10px_15px_-3px_rgba(0,0,0,0.03),0_20px_25px_-5px_rgba(0,0,0,0.02)]">
-        <CardHeader className="py-5 px-6 border-b border-[#F3F4F6] dark:border-slate-800">
-          <CardTitle className="flex items-center gap-2 text-base font-semibold text-[#111827] dark:text-slate-100">
+    <div className="flex h-full gap-7 overflow-hidden">
+      {/* Settings Column */}
+      <Card className="flex h-full w-[380px] shrink-0 flex-col overflow-hidden rounded-2xl border border-black/[0.06] dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs">
+        <CardHeader className="py-4 px-6 border-b border-slate-100 dark:border-slate-800 flex flex-row items-center justify-between shrink-0">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
             <SlidersHorizontal className="size-4 text-blue-600" />
             混剪规则设置
           </CardTitle>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={handleResetGenerator}
+            disabled={busy}
+            className="h-7 text-xs font-semibold text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-lg cursor-pointer gap-1"
+          >
+            <Plus className="size-3.5" />
+            新建页面
+          </Button>
         </CardHeader>
-        <CardContent className="flex flex-1 flex-col justify-between p-6">
+        <CardContent className="flex-1 overflow-y-auto p-6 space-y-6">
           <div className="flex flex-col">
             {/* Section 1: 核心内容提取 */}
             <div>
@@ -561,7 +608,7 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
                             <Volume2 className="size-3.5 text-slate-400" />
                             音乐音量 (无极调节)
                           </span>
-                          <span className="font-bold font-mono text-blue-600 dark:text-blue-400">
+                  <span className="font-bold font-mono text-blue-600 dark:text-blue-400">
                             {bgmVolume}%
                           </span>
                         </div>
@@ -588,12 +635,13 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
               </div>
             </div>
           </div>
+        </CardContent>
 
-          <div className="pt-6">
-            {error ? <p className="mb-2 text-xs text-destructive">{error}</p> : null}
+        <div className="p-5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/90 backdrop-blur-xs flex flex-col gap-2 shrink-0">
+            {error ? <p className="text-center text-xs text-rose-500 font-medium">{error}</p> : null}
 
             <Button
-              className="h-11 w-full rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-medium text-sm shadow-[0_4px_14px_0_rgba(37,99,235,0.35)] transition-all active:scale-[0.99] cursor-pointer flex items-center justify-center gap-2"
+              className="h-11 w-full rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold text-sm shadow-[0_4px_14px_0_rgba(37,99,235,0.35)] transition-all active:scale-[0.99] cursor-pointer flex items-center justify-center gap-2 border-none"
               disabled={busy || !selectedIds.length}
               onClick={() => void startGenerate()}
             >
@@ -605,8 +653,7 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
               {busy ? "处理中…" : "一键智能成片"}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </Card>
 
       {/* Workspace Column (Right Column - Light Mode Studio) */}
       <div className="flex min-w-0 flex-1 flex-col gap-6">
@@ -618,13 +665,25 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
               {activeGroup ? ` · ${activeGroup.name}` : ""} (
               {selected.length})
             </CardTitle>
-            <button
-              type="button"
-              className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 cursor-pointer transition-colors"
-              onClick={onGoLibrary}
-            >
-              去素材库选择
-            </button>
+            <div className="flex items-center gap-3">
+              {onGoHistory && (
+                <button
+                  type="button"
+                  className="text-xs font-medium text-slate-600 hover:text-blue-600 dark:text-slate-400 cursor-pointer transition-colors flex items-center gap-1"
+                  onClick={onGoHistory}
+                >
+                  <History className="size-3.5" />
+                  查看成片历史
+                </button>
+              )}
+              <button
+                type="button"
+                className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 cursor-pointer transition-colors"
+                onClick={onGoLibrary}
+              >
+                去素材库选择
+              </button>
+            </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-3.5 p-5">
             <div className="relative flex items-center overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 p-4">
