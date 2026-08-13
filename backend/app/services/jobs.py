@@ -32,7 +32,7 @@ from app.services.openai_client import has_openai_key
 
 
 TARGET_SECONDS = {
-    DurationPreference.short: 35.0,
+    DurationPreference.short: 45.0,  # 默认 45 秒爆款短版
     DurationPreference.mid: 60.0,
     DurationPreference.long: 90.0,
 }
@@ -156,6 +156,10 @@ class JobManager:
                     material_ids=material_ids,
                     group_id=req.group_id,
                     duration_preference=req.duration_preference,
+                    target_seconds=req.target_seconds,
+                    speech_speed=req.speech_speed,
+                    randomize_intro=req.randomize_intro,
+                    subtitle_position=req.subtitle_position,
                     add_captions=req.add_captions,
                     add_sfx=req.add_sfx,
                     add_subtitles=req.add_subtitles,
@@ -179,7 +183,10 @@ class JobManager:
                 else req.add_captions
             )
             add_bgm = req.add_bgm if req.add_bgm is not None else req.add_sfx
-            target = TARGET_SECONDS[req.duration_preference]
+            target = req.target_seconds or TARGET_SECONDS.get(req.duration_preference, 60.0)
+            speech_speed = max(0.8, min(1.5, req.speech_speed))
+            raw_target = target * speech_speed
+
             out_path = settings.outputs_dir / f"{job_id}.mp4"
 
             def on_progress(pct: int, message: str) -> None:
@@ -215,13 +222,14 @@ class JobManager:
                         "也可在设置中配置 OpenAI 兼容密钥作为 Whisper 回退"
                     )
 
-                on_progress(32, "按带货结构选句（介绍→价格）…")
+                on_progress(32, "按带货结构选句（介绍→价格，开头防重处理）…")
                 rules = ExtractRules.from_dict(req.extract_rules)
                 plan = build_sell_plan(
                     transcribed,
-                    target_seconds=target,
+                    target_seconds=raw_target,
                     rules=rules,
                     variant=req.variant_index,
+                    randomize_intro=req.randomize_intro,
                 )
                 magic_cues = build_magic_cues(plan, variant=req.variant_index)
 
@@ -230,7 +238,7 @@ class JobManager:
                     candidates = collect_ai_candidates(transcribed, rules=rules)
                     judged = ai_judge_sell_plan(
                         candidates,
-                        target_seconds=target,
+                        target_seconds=raw_target,
                         variant=req.variant_index,
                     )
                     if judged:
@@ -255,6 +263,8 @@ class JobManager:
                     bgm_volume=req.bgm_volume,
                     bgm_file=req.bgm_file,
                     magic_cues=magic_cues,
+                    speech_speed=speech_speed,
+                    subtitle_position=req.subtitle_position,
                     on_progress=on_progress,
                 )
             else:
@@ -283,9 +293,18 @@ class JobManager:
             if not headline_text:
                 headline_text = req.title or "爆款切片 极速出片"
 
-            on_progress(94, "基于视频核心卖点自动生成配套爆款封面…")
+            group = store.get_group(req.group_id) if req.group_id else None
+            group_name = group.name if group else None
+
+            on_progress(94, "基于视频真实画面与核心卖点生成强关联爆款封面…")
             try:
-                covers = generate_video_covers(headline=headline_text, job_id=job_id, count=2)
+                covers = generate_video_covers(
+                    headline=headline_text,
+                    job_id=job_id,
+                    video_path=out_path,
+                    group_name=group_name,
+                    count=2,
+                )
             except Exception:
                 covers = []
 
@@ -309,6 +328,60 @@ class JobManager:
                 error=str(exc),
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
+        finally:
+            # 渲染结束（无论成功与否），清理中间剪辑工程目录 data/work/<job_id>
+            work_dir = settings.work_dir / job_id
+            if work_dir.exists():
+                try:
+                    shutil.rmtree(work_dir)
+                except Exception:
+                    pass
+
+    def generate_covers_for_job(
+        self,
+        job_id: str,
+        headline: str | None = None,
+        count: int = 4,
+        style: str = "yellow-red",
+    ) -> JobOut:
+        # 1. 仅在获取任务记录时获取锁
+        with self._lock:
+            job = store.get_generate_job(job_id)
+            if not job:
+                raise KeyError("任务不存在")
+            target_headline = (headline or job.headline or "爆款带货 极速出片").strip()
+            video_path = Path(job.output_path) if job.output_path else None
+            group_name = None
+            if job.group_id:
+                grp = store.get_group(job.group_id)
+                if grp:
+                    group_name = grp.name
+
+        # 2. 将耗时的 HTTP AI 接口生图请求移出锁范围
+        new_covers = generate_video_covers(
+            headline=target_headline,
+            job_id=job_id,
+            video_path=video_path,
+            group_name=group_name,
+            count=count,
+            style=style,
+        )
+
+        # 3. 更新数据库记录时再次加锁
+        with self._lock:
+            job = store.get_generate_job(job_id)
+            if not job:
+                raise KeyError("任务不存在")
+            existing = job.covers or []
+            updated_covers = new_covers + existing
+            updated_job = job.model_copy(
+                update={
+                    "headline": target_headline,
+                    "covers": updated_covers,
+                }
+            )
+            store.upsert_generate_job(updated_job)
+            return updated_job
 
 
 jobs = JobManager()

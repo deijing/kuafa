@@ -58,6 +58,10 @@ class GenerateRequest(BaseModel):
     material_ids: list[str] = Field(default_factory=list)
     group_id: str | None = None
     duration_preference: DurationPreference = DurationPreference.mid
+    target_seconds: float | None = Field(default=None, ge=15.0, le=180.0)  # 精确目标时长（秒）
+    speech_speed: float = Field(default=1.0, ge=0.8, le=1.5)  # 语速倍率（0.8x - 1.5x）
+    randomize_intro: bool = True  # 打散/随机开头，避免多条视频开头完全一致
+    subtitle_position: Literal["high", "mid", "low"] = "high"  # 字幕垂直位置（high=靠上安全区）
     add_captions: bool = True  # 口播字幕
     add_sfx: bool = True  # 背景音乐
     add_subtitles: bool | None = None
@@ -69,16 +73,20 @@ class GenerateRequest(BaseModel):
     # bargain / detail / silence — 混剪规则勾选
     extract_rules: dict[str, bool] | None = None
     # 批量成片：同素材池生成差异化版本（0=默认，1/2…换句序与侧重）
-    variant_index: int = Field(default=0, ge=0, le=9)
+    variant_index: int = Field(default=0, ge=0, le=100)
 
 
 class BatchGenerateRequest(BaseModel):
     """一次从同一素材文件夹生成多条差异化带货成片。"""
 
     group_id: str
-    count: int = Field(default=1, ge=1, le=3)
+    count: int = Field(default=1, ge=1, le=50)
     material_ids: list[str] = Field(default_factory=list)
     duration_preference: DurationPreference = DurationPreference.mid
+    target_seconds: float | None = Field(default=None, ge=15.0, le=180.0)
+    speech_speed: float = Field(default=1.0, ge=0.8, le=1.5)
+    randomize_intro: bool = True
+    subtitle_position: Literal["high", "mid", "low"] = "high"
     add_captions: bool = True
     add_sfx: bool = True
     add_subtitles: bool | None = None
@@ -111,6 +119,17 @@ class CoverRequest(BaseModel):
     style: CoverStyle = CoverStyle.yellow_red
     count: int = Field(default=4, ge=1, le=6)
     mode: Literal["ai", "template"] = "ai"
+
+
+class JobCoverRequest(BaseModel):
+    headline: str | None = None
+    style: CoverStyle = CoverStyle.yellow_red
+    count: int = Field(default=4, ge=1, le=6)
+
+
+class JobExportZipRequest(BaseModel):
+    job_ids: list[str] = Field(min_length=1)
+    include_covers: bool = True
 
 
 class CoverResult(BaseModel):

@@ -122,6 +122,8 @@ def write_ass_subtitles(
     ass_path: Path,
     *,
     magic_cues: list[MagicCue] | None = None,
+    speech_speed: float = 1.0,
+    subtitle_position: str = "high",
 ) -> Path:
     """
     写 ASS：
@@ -130,6 +132,7 @@ def write_ass_subtitles(
     """
     # WrapStyle:2 = 不自动换行；字幕内容本身也不含 \N
     font_name = resolve_subtitle_font()
+    margin_v = 380 if subtitle_position == "high" else (500 if subtitle_position == "mid" else 260)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -138,7 +141,7 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},64,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,2,0,1,4,0,2,80,80,220,1
+Style: Default,{font_name},64,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,2,0,1,4,0,2,80,80,{margin_v},1
 Style: Hook,{font_name},110,&H0000D7FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,4,0,1,5,0,8,60,60,160,1
 
 [Events]
@@ -146,8 +149,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = [header]
     cursor = 0.0
+    speed = max(0.5, min(2.0, speech_speed))
     for clip in clips:
-        dur = max(0.2, clip.end - clip.start)
+        dur = max(0.2, (clip.end - clip.start) / speed)
         clip_start = cursor
         clip_end = cursor + dur
         chunks = split_subtitle_chunks(clip.text, max_chars=10)
@@ -164,9 +168,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if i == len(chunks) - 1:
                 end = clip_end
             else:
-                end = min(clip_end, t + max(0.28, share))
+                end = min(clip_end, t + max(0.28 / speed, share))
             if end <= t:
-                end = min(clip_end, t + 0.28)
+                end = min(clip_end, t + 0.28 / speed)
             # 轻微淡入，单行展示
             text = "{\\fad(80,60)}" + chunk
             lines.append(
@@ -179,8 +183,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         text = _ass_escape(re.sub(r"\s+", "", cue.text.strip()))[:10]
         if not text:
             continue
-        start = max(0.0, cue.at)
-        end = start + max(0.8, cue.duration)
+        start = max(0.0, cue.at / speed)
+        end = start + max(0.8, cue.duration / speed)
         # 缩放弹入 + 淡入淡出（神奇大字动效）
         anim = (
             r"{\fad(120,220)\t(0,180,\fscx128\fscy128)"
@@ -204,6 +208,8 @@ def render_sell_video(
     bgm_volume: int = 25,
     bgm_file: str | None = None,
     magic_cues: list[MagicCue] | None = None,
+    speech_speed: float = 1.0,
+    subtitle_position: str = "high",
     on_progress,
 ) -> float:
     if not clips:
@@ -221,8 +227,17 @@ def render_sell_video(
         # 进度接在 ASR(~32%) 之后，保持单调：35→75
         on_progress(35 + int(40 * i / max(n, 1)), f"按句切割片段 {i + 1}/{n}…")
         seg = work / f"seg_{i:03d}.mp4"
-        duration = max(0.2, clip.end - clip.start)
+        raw_dur = max(0.2, clip.end - clip.start)
         info = probe(clip.path)
+        
+        vf_filter = (
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
+        )
+        if abs(speech_speed - 1.0) > 0.01:
+            vf_filter += f"setpts=PTS/{speech_speed:.4f},"
+        vf_filter += f"fps={fps},format=yuv420p"
+
         # -ss 放在 -i 之后：按 ASR 时间戳精确切，避免关键帧近似切到半个字
         cmd = [
             settings.ffmpeg_bin,
@@ -232,15 +247,16 @@ def render_sell_video(
             "-ss",
             f"{clip.start:.3f}",
             "-t",
-            f"{duration:.3f}",
+            f"{raw_dur:.3f}",
             "-vf",
-            f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p",
+            vf_filter,
         ]
         if info.has_audio:
-            cmd += [
-                "-af",
-                "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo",
-            ]
+            af_filter = ""
+            if abs(speech_speed - 1.0) > 0.01:
+                af_filter += f"atempo={speech_speed:.4f},"
+            af_filter += "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo"
+            cmd += ["-af", af_filter]
         else:
             cmd += [
                 "-f",
@@ -311,9 +327,11 @@ def render_sell_video(
             clips if add_subtitles else [],
             work / "subs.ass",
             magic_cues=magic_cues,
+            speech_speed=speech_speed,
+            subtitle_position=subtitle_position,
         )
-        # Escape path for ffmpeg subtitles filter on macOS
-        ass_esc = str(ass.resolve()).replace("\\", "\\\\").replace(":", "\\:")
+        # Escape path for ffmpeg subtitles filter on macOS & Windows
+        ass_esc = str(ass.resolve()).replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
         subtitled = work / "subtitled.mp4"
         run_cmd(
             [

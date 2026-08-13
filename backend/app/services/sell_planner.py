@@ -90,16 +90,19 @@ def build_sell_plan(
     target_seconds: float = 60.0,
     rules: ExtractRules | None = None,
     variant: int = 0,
+    randomize_intro: bool = True,
 ) -> list[EditClip]:
     """
     Build a Douyin selling cut:
     front = product intro, middle/end = price/promo, fillers fill remaining time.
     Cuts are always whole ASR sentences (no mid-character trim).
 
-    variant>0: diversify cut for batch production (rotate material preference,
-    skip top-scoring clips, shift intro/price budget) so multiple jobs from the
-    same folder don't produce identical edits.
+    variant>0 / randomize_intro=True: diversify cut for batch or single production
+    (rotate material preference, pick different top intro hooks, shift budget)
+    so multiple jobs from the same folder/anchors don't produce identical intros.
     """
+    import random
+
     rules = rules or ExtractRules()
     variant = max(0, int(variant))
 
@@ -153,16 +156,25 @@ def build_sell_plan(
         key=lambda c: (c.path.name, c.start),
     )
 
-    # Rotate ranked lists so variant N skips the top picks of earlier variants.
-    if variant and intros:
-        rot = variant % len(intros)
+    # Rotate ranked lists so variant N or randomized runs get distinct selections.
+    if intros:
+        if variant > 0:
+            rot = (variant * 3 + random.randint(0, max(0, len(intros) - 1))) % len(intros)
+        elif randomize_intro:
+            top_candidates = min(5, len(intros))
+            rot = random.randrange(top_candidates) if top_candidates > 1 else 0
+        else:
+            rot = 0
         intros = intros[rot:] + intros[:rot]
-    if variant and prices:
-        rot = variant % len(prices)
+
+    if prices:
+        rot = (variant * 7 + (random.randint(0, max(0, len(prices) - 1)) if randomize_intro else 0)) % len(prices)
         prices = prices[rot:] + prices[:rot]
-    if variant and fillers:
-        rot = (variant * 3) % len(fillers)
-        fillers = fillers[rot:] + fillers[:rot]
+
+    if fillers:
+        # Seeded shuffle per variant for high diversity across batch outputs
+        rng = random.Random(variant * 997 + (13 if randomize_intro else 0))
+        rng.shuffle(fillers)
 
     chronological = sorted(all_items, key=lambda c: (c.path.name, c.start))
     if variant and chronological:
@@ -186,9 +198,9 @@ def build_sell_plan(
         total += dur
         return True
 
-    # Variant shifts structure: 0=intro-heavy, 1=balanced, 2+=price-forward.
-    intro_ratio = 0.35 if variant == 0 else (0.28 if variant == 1 else 0.22)
-    price_ratio = 0.30 if variant == 0 else (0.35 if variant == 1 else 0.42)
+    # Dynamically shift structure ratios per variant for multi-video variety
+    intro_ratio = max(0.18, min(0.42, 0.30 + ((variant % 5) - 2) * 0.04))
+    price_ratio = max(0.20, min(0.45, 0.32 + ((variant % 3) - 1) * 0.05))
 
     # 1) intro block
     intro_budget = target_seconds * intro_ratio
@@ -244,19 +256,44 @@ def build_sell_plan(
     others.sort(key=lambda c: (c.path.name, c.start))
 
     ordered = intros_sel + prices_sel + others
-    # Variant 2+: lightly interleave fillers earlier for different pacing.
-    if variant >= 2 and others and intros_sel:
+    # Diverse clip interleaving based on variant mode
+    v_mode = variant % 3
+    if v_mode == 1 and others and intros_sel:
         half = max(1, len(others) // 2)
         ordered = intros_sel + others[:half] + prices_sel + others[half:]
+    elif v_mode == 2 and others and prices_sel:
+        half = max(1, len(others) // 2)
+        ordered = intros_sel + prices_sel + others
+
     return ordered
 
 
 def build_magic_cues(clips: list[EditClip], *, variant: int = 0) -> list[MagicCue]:
     """规则兜底：在价格/逼单句附近弹出短大字提示。"""
-    tips_price = ["破价！", "今天特价", "手慢无", "马上拍"]
-    tips_intro = ["必入！", "绝绝子", "闭眼入"]
-    tips = tips_price[variant % len(tips_price) :] + tips_price
-    intro_tips = tips_intro[variant % len(tips_intro) :] + tips_intro
+    tips_price = [
+        "破价！",
+        "今天特价",
+        "手慢无",
+        "马上拍",
+        "限时秒杀",
+        "立省两百",
+        "福利价",
+        "最后一波",
+        "闭眼冲",
+    ]
+    tips_intro = [
+        "必入！",
+        "绝绝子",
+        "闭眼入",
+        "主推爆款",
+        "真的好看",
+        "质感拉满",
+        "看这里",
+    ]
+    offset = variant % len(tips_price)
+    tips = tips_price[offset:] + tips_price[:offset]
+    intro_offset = variant % len(tips_intro)
+    intro_tips = tips_intro[intro_offset:] + tips_intro[:intro_offset]
 
     cues: list[MagicCue] = []
     t = 0.0

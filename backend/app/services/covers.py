@@ -162,38 +162,108 @@ class CoverJobManager:
 cover_jobs = CoverJobManager()
 
 
-def _build_svg_cover(text: str, index: int = 0) -> str:
+import base64
+from pathlib import Path
+from app.services.ffmpeg_pipeline import run_cmd
+
+
+def extract_video_frame(video_path: Path, timestamp_sec: float, out_jpeg: Path) -> bool:
+    try:
+        run_cmd([
+            settings.ffmpeg_bin,
+            "-y",
+            "-ss", str(timestamp_sec),
+            "-i", str(video_path),
+            "-vframes", "1",
+            "-q:v", "2",
+            str(out_jpeg),
+        ], timeout=15)
+        return out_jpeg.exists() and out_jpeg.stat().st_size > 0
+    except Exception:
+        return False
+
+
+def _build_svg_cover(
+    text: str,
+    index: int = 0,
+    frame_jpeg_path: Path | None = None,
+    group_name: str | None = None,
+    style: str = "yellow-red",
+) -> str:
     text_clean = text.strip() or "爆款热销推荐"
     chunk_size = 7
     lines = [text_clean[i : i + chunk_size] for i in range(0, len(text_clean), chunk_size)]
     if not lines:
         lines = ["爆款热销推荐"]
 
-    bg_fill = "#FACC15" if index == 0 else "#09090B"
-    stroke_color = "#DC2626" if index == 0 else "#FACC15"
-    title_color = "#DC2626" if index == 0 else "#FACC15"
-    badge_bg = "#DC2626" if index == 0 else "#EAB308"
-    badge_text = "#FFFFFF" if index == 0 else "#09090B"
-    badge_label = "🔥 爆款推荐" if index == 0 else "⚡ 镇店之宝"
+    img_bg_element = ""
+    if frame_jpeg_path and frame_jpeg_path.exists():
+        try:
+            b64_data = base64.b64encode(frame_jpeg_path.read_bytes()).decode("utf-8")
+            img_bg_element = f'<image href="data:image/jpeg;base64,{b64_data}" width="1024" height="1536" preserveAspectRatio="xMidYMid slice"/>'
+        except Exception:
+            img_bg_element = ""
+
+    if style == "black-yellow":
+        bg_fill = "#09090B"
+        stroke_color = "#EAB308"
+        title_color = "#FACC15"
+        badge_bg = "#EAB308"
+        badge_text = "#09090B"
+    elif style == "red-white":
+        bg_fill = "#DC2626"
+        stroke_color = "#FFFFFF"
+        title_color = "#FFFFFF"
+        badge_bg = "#FFFFFF"
+        badge_text = "#DC2626"
+    elif style == "neon-cyber":
+        bg_fill = "#0F172A"
+        stroke_color = "#06B6D4"
+        title_color = "#38BDF8"
+        badge_bg = "#EC4899"
+        badge_text = "#FFFFFF"
+    else:  # yellow-red default
+        bg_fill = "#FACC15"
+        stroke_color = "#DC2626"
+        title_color = "#DC2626"
+        badge_bg = "#DC2626"
+        badge_text = "#FFFFFF"
+
+    badge_label = f"🔥 {group_name}" if group_name else "🔥 抖音爆款"
 
     tspan_list = []
-    y_start = 720 - (len(lines[:3]) - 1) * 70
+    y_start = 820 - (len(lines[:3]) - 1) * 65
     for idx, line in enumerate(lines[:3]):
-        y_pos = y_start + idx * 140
+        y_pos = y_start + idx * 135
         tspan_list.append(
-            f'<text x="512" y="{y_pos}" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="105" font-weight="900" text-anchor="middle" fill="{title_color}">{line}</text>'
+            f'<text x="512" y="{y_pos}" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="100" font-weight="900" text-anchor="middle" fill="{title_color}">{line}</text>'
         )
 
     tspan_str = "\n".join(tspan_list)
 
+    overlay_rect = ""
+    if img_bg_element:
+        overlay_rect = """
+        <rect width="1024" height="1536" fill="black" opacity="0.35"/>
+        <rect y="500" width="1024" height="1036" fill="url(#bottomGradient)" opacity="0.9"/>
+        """
+
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1536" width="1024" height="1536">
+  <defs>
+    <linearGradient id="bottomGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.85"/>
+    </linearGradient>
+  </defs>
   <rect width="1024" height="1536" fill="{bg_fill}"/>
-  <rect x="96" y="140" width="832" height="180" rx="36" fill="{badge_bg}"/>
-  <text x="512" y="255" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="76" font-weight="900" text-anchor="middle" fill="{badge_text}">{badge_label}</text>
-  <rect x="64" y="400" width="896" height="760" rx="48" fill="#FFFFFF" fill-opacity="0.94" stroke="{stroke_color}" stroke-width="12"/>
+  {img_bg_element}
+  {overlay_rect}
+  <rect x="96" y="120" width="832" height="160" rx="32" fill="{badge_bg}"/>
+  <text x="512" y="225" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="68" font-weight="900" text-anchor="middle" fill="{badge_text}">{badge_label}</text>
+  <rect x="64" y="550" width="896" height="620" rx="40" fill="#FFFFFF" fill-opacity="0.94" stroke="{stroke_color}" stroke-width="10"/>
   {tspan_str}
-  <rect x="212" y="1250" width="600" height="130" rx="65" fill="{badge_bg}"/>
-  <text x="512" y="1330" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="52" font-weight="800" text-anchor="middle" fill="{badge_text}">点击看直播 · 领专属优惠</text>
+  <rect x="212" y="1270" width="600" height="120" rx="60" fill="{badge_bg}"/>
+  <text x="512" y="1345" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="48" font-weight="800" text-anchor="middle" fill="{badge_text}">点击看直播 · 领专属优惠</text>
 </svg>"""
 
 
@@ -201,27 +271,43 @@ def generate_video_covers(
     headline: str,
     job_id: str,
     *,
+    video_path: Path | str | None = None,
+    group_name: str | None = None,
     count: int = 2,
     style: str = "yellow-red",
 ) -> list[CoverResult]:
     """
-    基于视频内容与爆款卖点文案，为一键出片视频自动生成配套封面大字报。
-    - 如果配置了 CatsAPI 密钥：调用 GPT Image 2 生成多张 AI 艺术封面
-    - 如果未配置 / 接口限制：生成高清大字报封面，确保视频 100% 含有封面产出成果！
+    基于成片真实画面与核心卖点文案，为成片自动化绑定并生成高关联性爆款大字报封面。
+    - 如果存在成片视频 MP4 文件：通过 FFmpeg 截取成片高清截图，作为封面的真实底图！
+    - 如果配置了 CatsAPI 密钥：带入成片商品名称与场景结合 AI 渲染封面。
     """
     text = (headline or "").strip() or "爆款推荐 独家折扣"
     results: list[CoverResult] = []
     out_dir = settings.covers_dir / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    v_path = Path(video_path) if video_path else None
+
+    # 1. 尝试从成片视频中截取画面首帧/高光帧
+    extracted_frames: list[Path] = []
+    if v_path and v_path.exists():
+        timestamps = [1.5, 3.5, 6.0, 9.0]
+        for idx, ts in enumerate(timestamps[:count]):
+            frame_path = out_dir / f"frame_src_{idx + 1}.jpg"
+            if extract_video_frame(v_path, ts, frame_path):
+                extracted_frames.append(frame_path)
+
+    # 2. 如果配置了 AI 接口，带入商品与成片真实卖点 Prompt
     api_key = get_secret("catsapi_key", settings.catsapi_key)
     if api_key:
         try:
             for i in range(min(count, 4)):
                 style_prompt = STYLE_HINTS.get(style, STYLE_HINTS["yellow-red"])
                 angle = VARIANT_ANGLES[i % len(VARIANT_ANGLES)]
+                prod_desc = f"商品类别与主题：「{group_name}」。" if group_name else ""
                 prompt = (
                     "生成一张中国电商直播短视频竖版封面图，适合抖音/小红书/视频号。"
+                    f"{prod_desc}"
                     f"必须醒目展示大字报文案：「{text}」。"
                     f"文字样式要求：{style_prompt}。"
                     f"构图：{angle}。"
@@ -245,13 +331,20 @@ def generate_video_covers(
         except Exception:
             pass
 
-    # 回退/补全保底矢量大字报封面
+    # 3. 关联真实成片图底的高清矢量大字报封面
     if len(results) < count:
         start_idx = len(results)
         for i in range(start_idx, count):
             filename = f"cover_{i + 1:02d}.svg"
             dest = out_dir / filename
-            svg_content = _build_svg_cover(text, index=i)
+            frame_img = extracted_frames[i % len(extracted_frames)] if extracted_frames else None
+            svg_content = _build_svg_cover(
+                text,
+                index=i,
+                frame_jpeg_path=frame_img,
+                group_name=group_name,
+                style=style,
+            )
             dest.write_text(svg_content, encoding="utf-8")
             results.append(
                 CoverResult(

@@ -35,9 +35,13 @@ import { useMaterials } from "@/hooks/use-materials"
 import { useNotifications } from "@/hooks/use-notifications"
 import {
   createBatchJobs,
+  exportJobsZip,
   fetchJob,
+  fetchJobs,
+  generateJobCovers,
   uploadBgm,
   type BgmItem,
+  type CoverStyle,
   type DurationPreference,
   type Job,
 } from "@/lib/api"
@@ -51,8 +55,12 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
   const { groups, loading } = useMaterials()
 
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
-  const [count, setCount] = useState<"1" | "2" | "3">("1")
-  const [duration, setDuration] = useState<DurationPreference>("mid")
+  const [countInput, setCountInput] = useState<string>("3")
+  const [durationKey, setDurationKey] = useState<string>("s45")
+  const [customSeconds, setCustomSeconds] = useState<number>(45)
+  const [speechSpeed, setSpeechSpeed] = useState<number>(1.0)
+  const [randomizeIntro, setRandomizeIntro] = useState<boolean>(true)
+  const [subtitlePosition, setSubtitlePosition] = useState<"high" | "mid" | "low">("high")
   const [addSubtitles, setAddSubtitles] = useState(true)
   const [addBgm, setAddBgm] = useState(true)
   const [bgmVolume, setBgmVolume] = useState(25)
@@ -77,8 +85,30 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
     [selectedGroups]
   )
   const totalClips = selectedMaterials.length
-  const perGroupCount = Number(count) as 1 | 2 | 3
-  const totalVideos = selectedGroups.length * perGroupCount
+
+  const countNum = useMemo(() => {
+    const parsed = parseInt(countInput, 10)
+    if (isNaN(parsed) || parsed < 1) return 1
+    if (parsed > 50) return 50
+    return parsed
+  }, [countInput])
+
+  const totalVideos = selectedGroups.length * countNum
+
+  const targetSeconds = useMemo(() => {
+    if (durationKey === "s40") return 40
+    if (durationKey === "s45") return 45
+    if (durationKey === "mid") return 60
+    if (durationKey === "long") return 90
+    if (durationKey === "custom") return Math.max(15, Math.min(180, customSeconds || 45))
+    return 45
+  }, [durationKey, customSeconds])
+
+  const durationPref = useMemo<DurationPreference>(() => {
+    if (durationKey === "s40" || durationKey === "s45") return "short"
+    if (durationKey === "long") return "long"
+    return "mid"
+  }, [durationKey])
 
   // 默认勾选第一个有素材的组；组列表变化时清掉已不存在的选中项
   useEffect(() => {
@@ -124,14 +154,136 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
 
   const { notify } = useNotifications()
 
+  const [coverLoadingJobId, setCoverLoadingJobId] = useState<string | null>(null)
+  const [selectedExportJobIds, setSelectedExportJobIds] = useState<string[]>([])
+  const [coverStyle, setCoverStyle] = useState<CoverStyle>("yellow-red")
+  const [exportingZip, setExportingZip] = useState(false)
+
+  function toggleJobExportSelection(jobId: string) {
+    setSelectedExportJobIds((prev) =>
+      prev.includes(jobId) ? prev.filter((id) => id !== jobId) : [...prev, jobId]
+    )
+  }
+
+  function toggleSelectAllExportJobs() {
+    const succeededIds = jobs.filter((j) => j.status === "succeeded").map((j) => j.id)
+    if (selectedExportJobIds.length >= succeededIds.length && succeededIds.length > 0) {
+      setSelectedExportJobIds([])
+    } else {
+      setSelectedExportJobIds(succeededIds)
+    }
+  }
+
+  async function handleExportSelectedZip() {
+    if (!selectedExportJobIds.length) return
+    setExportingZip(true)
+    try {
+      await exportJobsZip(selectedExportJobIds, true)
+      notify({
+        title: "打包导出成功",
+        message: `已为所选的 ${selectedExportJobIds.length} 条成片及配套爆款封面生成 ZIP 文件！`,
+        type: "success",
+      })
+    } catch (err) {
+      notify({
+        title: "打包导出失败",
+        message: err instanceof Error ? err.message : "导出过程遇到异常",
+        type: "error",
+      })
+    } finally {
+      setExportingZip(false)
+    }
+  }
+
+  // 页面加载/从其他标签切回时：自动恢复最近成片记录
+  useEffect(() => {
+    let mounted = true
+    void fetchJobs()
+      .then((allJobs) => {
+        if (!mounted || jobs.length > 0) return
+        if (!allJobs || !allJobs.length) return
+        const recent = allJobs.filter(
+          (j) => j.status === "succeeded" || j.status === "running" || j.status === "queued"
+        )
+        if (recent.length > 0) {
+          const groupMatched = selectedGroupIds.length > 0
+            ? recent.filter((j) => j.group_id && selectedGroupIds.includes(j.group_id))
+            : []
+          const toShow = groupMatched.length > 0 ? groupMatched : recent.slice(0, 20)
+          if (toShow.length > 0) {
+            setJobs(toShow)
+            const succeeded = toShow.filter((j) => j.status === "succeeded")
+            setSelectedExportJobIds(succeeded.map((j) => j.id))
+            const firstOk = succeeded.find((j) => j.output_url)
+            if (firstOk) setPreviewJobId(firstOk.id)
+          }
+        }
+      })
+      .catch(() => {/* ignore */})
+    return () => {
+      mounted = false
+    }
+  }, [selectedGroupIds])
+
+  async function handleGenerateCoversForJob(jobId: string, headline?: string) {
+    setCoverLoadingJobId(jobId)
+    try {
+      const updated = await generateJobCovers(jobId, headline, 4, coverStyle)
+      setJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)))
+      notify({
+        title: "配套爆款封面生成完成",
+        message: "已为该成片扩充生成 4 张爆款大字报封面！",
+        type: "success",
+      })
+    } catch (err) {
+      notify({
+        title: "封面生成失败",
+        message: err instanceof Error ? err.message : "无法生成封面",
+        type: "error",
+      })
+    } finally {
+      setCoverLoadingJobId(null)
+    }
+  }
+
+  async function handleGenerateCoversForAll() {
+    const doneJobs = jobs.filter((j) => j.status === "succeeded")
+    if (!doneJobs.length) return
+    setBusy(true)
+    try {
+      const updatedList = await Promise.all(
+        doneJobs.map((j) => generateJobCovers(j.id, j.headline ?? undefined, 2, coverStyle))
+      )
+      setJobs((prev) =>
+        prev.map((j) => updatedList.find((u) => u.id === j.id) ?? j)
+      )
+      notify({
+        title: "全套爆款封面生成完成",
+        message: `已成功为 ${updatedList.length} 条成片生成配套大字报封面！`,
+        type: "success",
+      })
+    } catch (err) {
+      notify({
+        title: "生成封面失败",
+        message: err instanceof Error ? err.message : "批量封面生成异常",
+        type: "error",
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   useEffect(() => {
     if (!jobs.length || allDone) {
       if (allDone) setBusy(false)
       return
     }
     const timer = window.setInterval(() => {
-      void Promise.all(jobs.map((j) => fetchJob(j.id)))
-        .then((next) => {
+      void fetchJobs()
+        .then((allJobs) => {
+          const activeIds = new Set(jobs.map((j) => j.id))
+          const next = allJobs.filter((j) => activeIds.has(j.id))
+          if (!next.length) return
           setJobs(next)
           if (
             next.every((j) => j.status === "succeeded" || j.status === "failed")
@@ -148,13 +300,13 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
             if (succeededCount > 0) {
               notify({
                 title: "批量混剪任务完成",
-                message: `成功生成 ${succeededCount} 个成片${failedCount > 0 ? `，${failedCount} 个失败` : ""}！`,
+                message: `已成功生成 ${succeededCount} 条成片${failedCount ? `，${failedCount} 条失败` : ""}！`,
                 type: "success",
               })
             } else {
               notify({
-                title: "批量任务生成失败",
-                message: "所有批量合成任务均未成功，请检查素材和配置",
+                title: "批量混剪生成失败",
+                message: "所选任务渲染失败，请检查素材后重试",
                 type: "error",
               })
             }
@@ -163,7 +315,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
         .catch(() => {
           /* keep polling */
         })
-    }, 800)
+    }, 1200)
     return () => window.clearInterval(timer)
   }, [jobs, allDone, notify])
 
@@ -195,14 +347,18 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
     setJobs([])
     setPreviewJobId(null)
     try {
-      const n = Number(count) as 1 | 2 | 3
+      const n = countNum
       const results = await Promise.all(
         usable.map((group) =>
           createBatchJobs({
             group_id: group.id,
             count: n,
             material_ids: group.materials.map((m) => m.id),
-            duration_preference: duration,
+            duration_preference: durationPref,
+            target_seconds: targetSeconds,
+            speech_speed: speechSpeed,
+            randomize_intro: randomizeIntro,
+            subtitle_position: subtitlePosition,
             add_captions: addSubtitles,
             add_sfx: addBgm,
             add_subtitles: addSubtitles,
@@ -362,32 +518,58 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
             <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
 
             <div>
-              <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-1.5">
-                生成条数
-              </h4>
+              <div className="flex items-center justify-between mb-1.5">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200">
+                  生成条数（自定义）
+                </h4>
+                <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400">
+                  共 {selectedGroups.length * countNum} 条成片
+                </span>
+              </div>
               <p className="mb-3 text-[13px] text-[#9CA3AF] dark:text-slate-400 leading-relaxed">
-                每个已选素材组各生成这么多条差异化成片，便于抖音 A/B。
+                每个已选素材组将各自生成此数量的差异化防重成片，可自由输入条数（1~50条）。
               </p>
-              <ToggleGroup
-                type="single"
-                value={count}
-                onValueChange={(v) => {
-                  if (v === "1" || v === "2" || v === "3") setCount(v)
-                }}
-                variant="outline"
-                className="w-full"
-                disabled={busy}
-              >
-                <ToggleGroupItem value="1" className="flex-1 text-xs">
-                  1 条
-                </ToggleGroupItem>
-                <ToggleGroupItem value="2" className="flex-1 text-xs">
-                  2 条
-                </ToggleGroupItem>
-                <ToggleGroupItem value="3" className="flex-1 text-xs">
-                  3 条
-                </ToggleGroupItem>
-              </ToggleGroup>
+              
+              <div className="flex flex-col gap-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="flex flex-1 items-center justify-between rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 focus-within:ring-2 focus-within:ring-blue-500/20 transition-all">
+                    <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                      数量：
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={countInput}
+                      onChange={(e) => setCountInput(e.target.value)}
+                      disabled={busy}
+                      className="w-20 text-right text-sm font-bold font-mono text-blue-600 dark:text-blue-400 bg-transparent outline-none"
+                      placeholder="1"
+                    />
+                    <span className="ml-1 text-xs text-slate-400 font-medium">条 / 组</span>
+                  </div>
+                </div>
+
+                {/* Preset Pills */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {[1, 2, 3, 5, 10, 20].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setCountInput(String(preset))}
+                      className={cn(
+                        "rounded-lg px-2.5 py-1 text-xs font-medium transition-all cursor-pointer border",
+                        countNum === preset
+                          ? "bg-blue-600 text-white border-blue-600 shadow-2xs"
+                          : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100"
+                      )}
+                    >
+                      {preset} 条
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
@@ -431,12 +613,12 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
             <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
 
             <div>
-              <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-2.5">
-                成片时长偏好（约）
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-2">
+                成片时长偏好
               </h4>
               <Select
-                value={duration}
-                onValueChange={(v) => setDuration(v as DurationPreference)}
+                value={durationKey}
+                onValueChange={(v) => setDurationKey(v)}
                 disabled={busy}
               >
                 <SelectTrigger className="w-full text-xs h-10 rounded-xl border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[#4B5563] dark:text-slate-200 focus:ring-2 focus:ring-blue-500/20 transition-all">
@@ -444,12 +626,94 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectItem value="short">抖音短版 (~35秒)</SelectItem>
+                    <SelectItem value="s40">精简快节奏 (~40秒)</SelectItem>
+                    <SelectItem value="s45">黄金爆款 (~45秒) [推荐]</SelectItem>
                     <SelectItem value="mid">标准带货 (~60秒)</SelectItem>
-                    <SelectItem value="long">完整讲解 (~90秒)</SelectItem>
+                    <SelectItem value="long">深度讲解 (~90秒)</SelectItem>
+                    <SelectItem value="custom">⚙️ 自定义精确秒数…</SelectItem>
                   </SelectGroup>
                 </SelectContent>
               </Select>
+
+              {durationKey === "custom" && (
+                <div className="mt-2.5 flex items-center justify-between rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50/70 dark:bg-blue-950/40 px-3.5 py-2">
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                    自定义成片目标时长：
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={15}
+                      max={180}
+                      value={customSeconds}
+                      onChange={(e) => setCustomSeconds(Number(e.target.value))}
+                      disabled={busy}
+                      className="w-16 text-right text-sm font-bold font-mono text-blue-600 dark:text-blue-400 bg-transparent outline-none"
+                    />
+                    <span className="text-xs text-slate-500 font-semibold">秒</span>
+                  </div>
+                </div>
+              )}
+
+              <p className="mt-2 text-[12px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200/60 dark:border-amber-900/40 rounded-lg p-2 leading-relaxed">
+                💡 <strong>素材建议：</strong>素材较少（3~4个视频）推荐选 <strong>60秒</strong>；素材较多推荐选 <strong>40秒/45秒</strong>。
+              </p>
+            </div>
+
+            {/* Divider */}
+            <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
+
+            {/* Section: 语速与开头防重 */}
+            <div>
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-2.5">
+                语速倍率 & 开头防重
+              </h4>
+              <div className="flex flex-col gap-3">
+                {/* 语速调节 */}
+                <div className="flex items-center justify-between py-1 px-1">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
+                      口播语速倍率
+                    </span>
+                    <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
+                      加速不改变音调（推荐 1.1x 快节奏）
+                    </span>
+                  </div>
+                  <Select
+                    value={String(speechSpeed)}
+                    onValueChange={(v) => setSpeechSpeed(Number(v))}
+                    disabled={busy}
+                  >
+                    <SelectTrigger className="w-[120px] text-xs h-9 rounded-xl border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[#4B5563] dark:text-slate-200">
+                      <SelectValue placeholder="语速" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1.0x (原速)</SelectItem>
+                      <SelectItem value="1.1">1.1x (推荐快节奏)</SelectItem>
+                      <SelectItem value="1.15">1.15x (紧凑带货)</SelectItem>
+                      <SelectItem value="1.2">1.2x (极速切片)</SelectItem>
+                      <SelectItem value="1.25">1.25x (超快节奏)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* 开头防重 */}
+                <div className="flex items-center justify-between py-1 px-1">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
+                      开头随机防重
+                    </span>
+                    <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
+                      不同主播/多次生成随机换 Hook 开头
+                    </span>
+                  </div>
+                  <Switch
+                    checked={randomizeIntro}
+                    onCheckedChange={setRandomizeIntro}
+                    disabled={busy}
+                  />
+                </div>
+              </div>
             </div>
 
             <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
@@ -474,6 +738,33 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                     disabled={busy}
                   />
                 </div>
+
+                {addSubtitles ? (
+                  <div className="flex items-center justify-between py-1 px-1">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
+                        字幕显示位置
+                      </span>
+                      <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
+                        靠上安全区避开抖音/小红书底部UI
+                      </span>
+                    </div>
+                    <Select
+                      value={subtitlePosition}
+                      onValueChange={(v) => setSubtitlePosition(v as "high" | "mid" | "low")}
+                      disabled={busy}
+                    >
+                      <SelectTrigger className="w-[120px] text-xs h-9 rounded-xl border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[#4B5563] dark:text-slate-200">
+                        <SelectValue placeholder="位置" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="high">靠上安全区 (推荐)</SelectItem>
+                        <SelectItem value="mid">居中偏下</SelectItem>
+                        <SelectItem value="low">贴近底部</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
 
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center justify-between py-1 px-1">
@@ -600,7 +891,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
               {busy
                 ? `批量处理中… ${overallProgress}%`
                 : totalVideos > 0
-                  ? `一键成片 · ${selectedGroups.length} 组 × ${count} 条`
+                  ? `一键成片 · ${selectedGroups.length} 组 × ${countNum} 条`
                   : "一键成片"}
             </Button>
           </div>
@@ -661,81 +952,215 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
         </Card>
 
         {jobs.length > 0 ? (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {jobs.map((job, index) => {
-              const done = job.status === "succeeded"
-              const failed = job.status === "failed"
-              const active = job.status === "queued" || job.status === "running"
-              const selected = previewJobId === job.id
-              const groupName =
-                groups.find((g) => g.id === job.group_id)?.name ?? "成片"
-              return (
-                <button
-                  key={job.id}
-                  type="button"
-                  onClick={() => {
-                    if (done && job.output_url) setPreviewJobId(job.id)
-                  }}
-                  className={cn(
-                    "rounded-2xl border p-4 text-left transition-all",
-                    selected
-                      ? "border-blue-500 bg-blue-50/60 dark:bg-blue-950/30"
-                      : "border-black/[0.04] dark:border-slate-800 bg-white dark:bg-slate-900",
-                    done && "cursor-pointer hover:border-blue-400",
-                    !done && "cursor-default"
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="truncate text-sm font-semibold text-[#111827] dark:text-slate-100">
-                      {groupName}
-                      <span className="ml-1.5 font-mono text-[11px] font-medium text-[#9CA3AF]">
-                        #{index + 1}
-                      </span>
-                    </span>
-                    {done ? (
-                      <CheckCircle2 className="size-4 text-emerald-500" />
-                    ) : failed ? (
-                      <XCircle className="size-4 text-rose-500" />
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200">
+                  本轮成片记录 ({jobs.length} 条)
+                </span>
+                {jobs.some((j) => j.status === "succeeded") ? (
+                  <button
+                    type="button"
+                    onClick={toggleSelectAllExportJobs}
+                    className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 cursor-pointer ml-1"
+                  >
+                    {selectedExportJobIds.length === jobs.filter((j) => j.status === "succeeded").length
+                      ? "取消全选"
+                      : "全选已完成"}
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {jobs.some((j) => j.status === "succeeded") ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void handleGenerateCoversForAll()}
+                    className="h-7 px-2.5 text-xs font-medium border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100 cursor-pointer gap-1.5"
+                  >
+                    <Sparkles className="size-3.5 text-amber-500" />
+                    一键为全部成片生成封面
+                  </Button>
+                ) : null}
+
+                {selectedExportJobIds.length > 0 ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={exportingZip}
+                    onClick={() => void handleExportSelectedZip()}
+                    className="h-7 px-3 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white cursor-pointer gap-1.5 shadow-2xs"
+                  >
+                    {exportingZip ? (
+                      <Loader2 className="size-3 animate-spin text-white" />
                     ) : (
-                      <Loader2 className="size-4 animate-spin text-blue-600" />
-                    )}
-                  </div>
-                  <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-                    <div
-                      className={cn(
-                        "h-full rounded-full transition-all",
-                        failed
-                          ? "bg-rose-500"
-                          : done
-                            ? "bg-emerald-500"
-                            : "bg-blue-600"
-                      )}
-                      style={{ width: `${job.progress}%` }}
-                    />
-                  </div>
-                  <p className="text-[12px] text-[#9CA3AF] line-clamp-2">
-                    {failed
-                      ? job.error || "失败"
-                      : active
-                        ? job.message || "处理中…"
-                        : done
-                          ? `完成 · ${job.duration ? `${Math.round(job.duration)}秒` : "可预览"}`
-                          : job.message}
-                  </p>
-                  {done ? (
-                    <a
-                      href={`/api/jobs/${job.id}/download`}
-                      download
-                      onClick={(e) => e.stopPropagation()}
-                      className="mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-blue-600 hover:text-blue-700"
-                    >
                       <Download className="size-3.5" />
-                      下载
-                    </a>
-                  ) : null}
-                </button>
-              )
-            })}
+                    )}
+                    打包导出已选 ({selectedExportJobIds.length}条成片+配套封面 ZIP)
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {jobs.map((job, index) => {
+                const done = job.status === "succeeded"
+                const failed = job.status === "failed"
+                const active = job.status === "queued" || job.status === "running"
+                const selected = previewJobId === job.id
+                const isChecked = selectedExportJobIds.includes(job.id)
+                const groupName =
+                  groups.find((g) => g.id === job.group_id)?.name ?? "成片"
+                const isCoverLoading = coverLoadingJobId === job.id
+                const coversList = job.covers || []
+
+                return (
+                  <div
+                    key={job.id}
+                    onClick={() => {
+                      if (done && job.output_url) setPreviewJobId(job.id)
+                    }}
+                    className={cn(
+                      "flex flex-col rounded-2xl border p-4 text-left transition-all",
+                      selected
+                        ? "border-blue-500 bg-blue-50/60 dark:bg-blue-950/30 shadow-xs"
+                        : "border-black/[0.04] dark:border-slate-800 bg-white dark:bg-slate-900",
+                      done && "cursor-pointer hover:border-blue-400",
+                      !done && "cursor-default"
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {done ? (
+                          <Checkbox
+                            checked={isChecked}
+                            onCheckedChange={() => toggleJobExportSelection(job.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="rounded-[4px] border-slate-300 dark:border-slate-700 data-checked:bg-blue-600 data-checked:border-blue-600"
+                          />
+                        ) : null}
+                        <span className="truncate text-sm font-semibold text-[#111827] dark:text-slate-100">
+                          {groupName}
+                          <span className="ml-1.5 font-mono text-[11px] font-medium text-[#9CA3AF]">
+                            #{index + 1}
+                          </span>
+                        </span>
+                      </div>
+                      {done ? (
+                        <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+                      ) : failed ? (
+                        <XCircle className="size-4 text-rose-500 shrink-0" />
+                      ) : (
+                        <Loader2 className="size-4 animate-spin text-blue-600 shrink-0" />
+                      )}
+                    </div>
+                    <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                      <div
+                        className={cn(
+                          "h-full rounded-full transition-all",
+                          failed
+                            ? "bg-rose-500"
+                            : done
+                              ? "bg-emerald-500"
+                              : "bg-blue-600"
+                        )}
+                        style={{ width: `${job.progress}%` }}
+                      />
+                    </div>
+                    <p className="text-[12px] text-[#9CA3AF] line-clamp-2">
+                      {failed
+                        ? job.error || "失败"
+                        : active
+                          ? job.message || "处理中…"
+                          : done
+                            ? `完成 · ${job.duration ? `${Math.round(job.duration)}秒` : "可预览"}`
+                            : job.message}
+                    </p>
+
+                    {/* Integrated Companion Cover Section on Each Video */}
+                    {done ? (
+                      <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-2">
+                        {coversList.length > 0 ? (
+                          <div className="flex flex-col gap-1.5">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1">
+                                <Sparkles className="size-3 text-amber-500" />
+                                配套封面 ({coversList.length}张)
+                              </span>
+                              <button
+                                type="button"
+                                disabled={isCoverLoading || busy}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void handleGenerateCoversForJob(job.id)
+                                }}
+                                className="text-blue-600 hover:text-blue-700 font-medium cursor-pointer flex items-center gap-1"
+                              >
+                                {isCoverLoading ? (
+                                  <Loader2 className="size-3 animate-spin text-blue-600" />
+                                ) : null}
+                                + 补全封面
+                              </button>
+                            </div>
+                            <div className="flex items-center gap-1.5 overflow-x-auto py-1">
+                              {coversList.map((c, idx) => (
+                                <div
+                                  key={c.id || idx}
+                                  className="relative group size-11 shrink-0 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-900"
+                                >
+                                  <img src={c.url} alt="" className="size-full object-cover" />
+                                  <a
+                                    href={c.url}
+                                    download={`cover_${index + 1}_${idx + 1}`}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white"
+                                    title="下载此封面"
+                                  >
+                                    <Download className="size-3" />
+                                  </a>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={isCoverLoading || busy}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void handleGenerateCoversForJob(job.id)
+                            }}
+                            className="w-full py-1.5 px-2.5 rounded-xl border border-dashed border-amber-300 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 text-[11px] font-medium flex items-center justify-center gap-1.5 hover:bg-amber-100/80 transition-all cursor-pointer"
+                          >
+                            {isCoverLoading ? (
+                              <Loader2 className="size-3 animate-spin text-amber-600" />
+                            ) : (
+                              <Sparkles className="size-3 text-amber-500" />
+                            )}
+                            {isCoverLoading ? "生成封面中…" : "为本片生成配套爆款封面"}
+                          </button>
+                        )}
+
+                        <div className="flex items-center justify-between pt-1">
+                          <a
+                            href={`/api/jobs/${job.id}/download`}
+                            download
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 text-[12px] font-semibold text-blue-600 hover:text-blue-700"
+                          >
+                            <Download className="size-3.5" />
+                            下载成片视频
+                          </a>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                )
+              })}
+            </div>
           </div>
         ) : null}
 

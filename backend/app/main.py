@@ -1,10 +1,20 @@
 import os
+import zipfile
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+
+
+def cleanup_file(path: Path) -> None:
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
 
 from app.config import (
     ensure_dirs,
@@ -22,6 +32,8 @@ from app.models import (
     CatsAPITestOut,
     CoverJobOut,
     CoverRequest,
+    JobCoverRequest,
+    JobExportZipRequest,
     EnvCheckItem,
     EnvCheckResult,
     GenerateRequest,
@@ -420,6 +432,63 @@ def delete_job(job_id: str) -> JobOut:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/jobs/{job_id}/covers", response_model=JobOut)
+def generate_job_covers(job_id: str, req: JobCoverRequest | None = None) -> JobOut:
+    """为特定成片重新生成或扩充配套爆款封面。"""
+    req = req or JobCoverRequest()
+    try:
+        return jobs.generate_covers_for_job(
+            job_id=job_id,
+            headline=req.headline,
+            count=req.count,
+            style=req.style,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/jobs/export-zip")
+def export_jobs_zip(req: JobExportZipRequest, background_tasks: BackgroundTasks) -> FileResponse:
+    """勾选导出成片：打包指定的成片 MP4 与配套爆款封面大字报 ZIP 下载（支持响应后自动清理临时文件）。"""
+    if not req.job_ids:
+        raise HTTPException(400, "请勾选至少一条成片")
+
+    zip_filename = f"kuafa_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    zip_path = settings.outputs_dir / zip_filename
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for idx, jid in enumerate(req.job_ids, 1):
+            job = jobs.get(jid)
+            if not job or not job.output_path:
+                continue
+            video_file = Path(job.output_path)
+            if video_file.exists():
+                zf.write(video_file, arcname=f"成片_{idx}_{video_file.name}")
+
+            if req.include_covers and job.covers:
+                for c_idx, cover in enumerate(job.covers, 1):
+                    cover_filename = cover.url.split("/")[-1]
+                    cover_path = settings.covers_dir / cover_filename
+                    if cover_path.exists():
+                        zf.write(
+                            cover_path,
+                            arcname=f"成片_{idx}_配套封面/封面_{c_idx}_{cover_filename}",
+                        )
+
+    if not zip_path.exists() or zip_path.stat().st_size == 0:
+        raise HTTPException(400, "导出失败，未找到有效的成片文件")
+
+    background_tasks.add_task(cleanup_file, zip_path)
+
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=zip_filename,
+    )
 
 
 @app.post("/api/covers/generate", response_model=CoverJobOut)

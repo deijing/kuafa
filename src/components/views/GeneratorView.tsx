@@ -32,6 +32,8 @@ import { useNotifications } from "@/hooks/use-notifications"
 import {
   createGenerateJob,
   fetchJob,
+  fetchJobs,
+  generateJobCovers,
   uploadBgm,
   type BgmItem,
   type DurationPreference,
@@ -63,7 +65,12 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
     [groups, activeGroupId]
   )
 
-  const [duration, setDuration] = useState<DurationPreference>("mid")
+  const [durationKey, setDurationKey] = useState<string>("s45")
+  const [customSeconds, setCustomSeconds] = useState<number>(45)
+  const [countInput, setCountInput] = useState<string>("1")
+  const [speechSpeed, setSpeechSpeed] = useState<number>(1.0)
+  const [randomizeIntro, setRandomizeIntro] = useState<boolean>(true)
+  const [subtitlePosition, setSubtitlePosition] = useState<"high" | "mid" | "low">("high")
   const [addSubtitles, setAddSubtitles] = useState(true)
   const [addBgm, setAddBgm] = useState(true)
   const [bgmVolume, setBgmVolume] = useState<number>(25)
@@ -79,6 +86,47 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
   const [error, setError] = useState<string | null>(null)
 
   const { notify } = useNotifications()
+
+  const countNum = useMemo(() => {
+    const parsed = parseInt(countInput, 10)
+    if (isNaN(parsed) || parsed < 1) return 1
+    if (parsed > 50) return 50
+    return parsed
+  }, [countInput])
+
+  const targetSeconds = useMemo(() => {
+    if (durationKey === "s40") return 40
+    if (durationKey === "s45") return 45
+    if (durationKey === "mid") return 60
+    if (durationKey === "long") return 90
+    if (durationKey === "custom") return Math.max(15, Math.min(180, customSeconds || 45))
+    return 45
+  }, [durationKey, customSeconds])
+
+  const durationPref = useMemo<DurationPreference>(() => {
+    if (durationKey === "s40" || durationKey === "s45") return "short"
+    if (durationKey === "long") return "long"
+    return "mid"
+  }, [durationKey])
+
+  // 页面加载/标签切回时：自动恢复上一次成片状态
+  useEffect(() => {
+    let mounted = true
+    if (!job) {
+      void fetchJobs()
+        .then((allJobs) => {
+          if (!mounted) return
+          const recent = allJobs.find(
+            (j) => j.status === "succeeded" || j.status === "running" || j.status === "queued"
+          )
+          if (recent) setJob(recent)
+        })
+        .catch(() => {/* ignore */})
+    }
+    return () => {
+      mounted = false
+    }
+  }, [job])
 
   useEffect(() => {
     if (!job || (job.status !== "queued" && job.status !== "running")) {
@@ -134,23 +182,56 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
     setBusy(true)
     setJob(null)
     try {
-      const created = await createGenerateJob({
-        material_ids: selectedIds,
-        group_id: activeGroupId,
-        duration_preference: duration,
-        add_captions: addSubtitles,
-        add_sfx: addBgm,
-        add_subtitles: addSubtitles,
-        add_bgm: addBgm,
-        bgm_volume: bgmVolume,
-        bgm_file: customBgm ? customBgm.filename : null,
-        mode: "sell",
-        extract_rules: rules,
-        title: activeGroup
-          ? `${activeGroup.name} · 带货成片`
-          : "限时特惠 · 直播带货成片",
-      })
-      setJob(created)
+      const baseTitle = activeGroup
+        ? `${activeGroup.name} · 带货成片`
+        : "限时特惠 · 直播带货成片"
+
+      if (countNum === 1) {
+        const created = await createGenerateJob({
+          material_ids: selectedIds,
+          group_id: activeGroupId,
+          duration_preference: durationPref,
+          target_seconds: targetSeconds,
+          speech_speed: speechSpeed,
+          randomize_intro: randomizeIntro,
+          subtitle_position: subtitlePosition,
+          add_captions: addSubtitles,
+          add_sfx: addBgm,
+          add_subtitles: addSubtitles,
+          add_bgm: addBgm,
+          bgm_volume: bgmVolume,
+          bgm_file: customBgm ? customBgm.filename : null,
+          mode: "sell",
+          extract_rules: rules,
+          title: baseTitle,
+        })
+        setJob(created)
+      } else {
+        const createdJobs = await Promise.all(
+          Array.from({ length: countNum }).map((_, i) =>
+            createGenerateJob({
+              material_ids: selectedIds,
+              group_id: activeGroupId,
+              duration_preference: durationPref,
+              target_seconds: targetSeconds,
+              speech_speed: speechSpeed,
+              randomize_intro: randomizeIntro,
+              subtitle_position: subtitlePosition,
+              add_captions: addSubtitles,
+              add_sfx: addBgm,
+              add_subtitles: addSubtitles,
+              add_bgm: addBgm,
+              bgm_volume: bgmVolume,
+              bgm_file: customBgm ? customBgm.filename : null,
+              mode: "sell",
+              extract_rules: rules,
+              title: `${baseTitle} #${i + 1}`,
+              variant_index: i,
+            })
+          )
+        )
+        if (createdJobs.length) setJob(createdJobs[0])
+      }
     } catch (err) {
       setBusy(false)
       setError(err instanceof Error ? err.message : "创建任务失败")
@@ -213,26 +294,149 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
             {/* Divider */}
             <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
 
+            {/* Section: 成片条数 */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200">
+                  生成条数
+                </h4>
+                <span className="text-[12px] font-semibold text-blue-600 dark:text-blue-400">
+                  {countNum > 1 ? `基于所选素材生成 ${countNum} 条不同成片` : "生成 1 条精剪成片"}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {[1, 2, 3, 5].map((cnt) => (
+                  <button
+                    key={cnt}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setCountInput(String(cnt))}
+                    className={cn(
+                      "flex-1 rounded-xl py-1.5 text-xs font-semibold transition-all cursor-pointer border text-center",
+                      countNum === cnt
+                        ? "bg-blue-600 text-white border-blue-600 shadow-2xs"
+                        : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100"
+                    )}
+                  >
+                    {cnt} 条
+                  </button>
+                ))}
+                <div className="flex items-center gap-1 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-1">
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={countInput}
+                    onChange={(e) => setCountInput(e.target.value)}
+                    className="w-8 text-center text-xs font-bold font-mono text-blue-600 dark:text-blue-400 bg-transparent outline-none"
+                  />
+                  <span className="text-[11px] text-slate-400 font-medium">条</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
+
             {/* Section 2: 成片时长偏好 */}
             <div>
-              <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-2.5">
-                成片时长偏好（约）
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-2">
+                成片时长偏好
               </h4>
               <Select
-                value={duration}
-                onValueChange={(v) => setDuration(v as DurationPreference)}
+                value={durationKey}
+                onValueChange={(v) => setDurationKey(v)}
               >
                 <SelectTrigger className="w-full text-xs h-10 rounded-xl border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[#4B5563] dark:text-slate-200 focus:ring-2 focus:ring-blue-500/20 transition-all">
                   <SelectValue placeholder="选择时长" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectItem value="short">抖音短版 (~35秒)</SelectItem>
+                    <SelectItem value="s40">精简快节奏 (~40秒)</SelectItem>
+                    <SelectItem value="s45">黄金爆款 (~45秒) [推荐]</SelectItem>
                     <SelectItem value="mid">标准带货 (~60秒)</SelectItem>
-                    <SelectItem value="long">完整讲解 (~90秒)</SelectItem>
+                    <SelectItem value="long">深度讲解 (~90秒)</SelectItem>
+                    <SelectItem value="custom">⚙️ 自定义精确秒数…</SelectItem>
                   </SelectGroup>
                 </SelectContent>
               </Select>
+
+              {durationKey === "custom" && (
+                <div className="mt-2.5 flex items-center justify-between rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50/70 dark:bg-blue-950/40 px-3.5 py-2">
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                    自定义成片目标时长：
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={15}
+                      max={180}
+                      value={customSeconds}
+                      onChange={(e) => setCustomSeconds(Number(e.target.value))}
+                      className="w-16 text-right text-sm font-bold font-mono text-blue-600 dark:text-blue-400 bg-transparent outline-none"
+                    />
+                    <span className="text-xs text-slate-500 font-semibold">秒</span>
+                  </div>
+                </div>
+              )}
+
+              <p className="mt-2 text-[12px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200/60 dark:border-amber-900/40 rounded-lg p-2 leading-relaxed">
+                💡 <strong>素材建议：</strong>素材较少（3~4个视频）推荐选 <strong>60秒</strong>；素材较多推荐选 <strong>40秒/45秒</strong>。
+              </p>
+            </div>
+
+            {/* Divider */}
+            <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
+
+            {/* Section 2.5: 语速与开头防重 */}
+            <div>
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-2.5">
+                语速倍率 & 开头防重
+              </h4>
+              <div className="flex flex-col gap-3">
+                {/* 语速调节 */}
+                <div className="flex items-center justify-between py-1 px-1">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
+                      口播语速倍率
+                    </span>
+                    <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
+                      加速不改变音调（推荐 1.1x 快节奏）
+                    </span>
+                  </div>
+                  <Select
+                    value={String(speechSpeed)}
+                    onValueChange={(v) => setSpeechSpeed(Number(v))}
+                  >
+                    <SelectTrigger className="w-[120px] text-xs h-9 rounded-xl border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[#4B5563] dark:text-slate-200">
+                      <SelectValue placeholder="语速" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1.0x (原速)</SelectItem>
+                      <SelectItem value="1.1">1.1x (推荐快节奏)</SelectItem>
+                      <SelectItem value="1.15">1.15x (紧凑带货)</SelectItem>
+                      <SelectItem value="1.2">1.2x (极速切片)</SelectItem>
+                      <SelectItem value="1.25">1.25x (超快节奏)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* 开头防重 */}
+                <div className="flex items-center justify-between py-1 px-1">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
+                      开头随机防重
+                    </span>
+                    <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
+                      不同主播/多次生成随机换 Hook 开头
+                    </span>
+                  </div>
+                  <Switch
+                    checked={randomizeIntro}
+                    onCheckedChange={setRandomizeIntro}
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Divider */}
@@ -258,6 +462,32 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
                     onCheckedChange={setAddSubtitles}
                   />
                 </div>
+
+                {addSubtitles ? (
+                  <div className="flex items-center justify-between py-1 px-1">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
+                        字幕显示位置
+                      </span>
+                      <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
+                        靠上安全区避开抖音/小红书底部UI
+                      </span>
+                    </div>
+                    <Select
+                      value={subtitlePosition}
+                      onValueChange={(v) => setSubtitlePosition(v as "high" | "mid" | "low")}
+                    >
+                      <SelectTrigger className="w-[120px] text-xs h-9 rounded-xl border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[#4B5563] dark:text-slate-200">
+                        <SelectValue placeholder="位置" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="high">靠上安全区 (推荐)</SelectItem>
+                        <SelectItem value="mid">居中偏下</SelectItem>
+                        <SelectItem value="low">贴近底部</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
 
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center justify-between py-1 px-1">
@@ -352,7 +582,7 @@ export function GeneratorView({ onGoLibrary }: GeneratorViewProps) {
                   <Info className="size-4 text-blue-600 shrink-0 mt-0.5" />
                   <div>
                     输出固定 <strong className="text-[#111827] dark:text-slate-100 font-semibold">9:16 · 1080×1920</strong>
-                    。配置 DeepSeek 后 AI 主观选句；字幕每段 ≤10 字不换行，并带神奇大字动效。
+                    。配置 DeepSeek 后 AI 主观选句；字幕已默认提升至靠上安全区，避免底部控制栏遮挡。
                   </div>
                 </div>
               </div>

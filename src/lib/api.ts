@@ -59,6 +59,10 @@ export type GeneratePayload = {
   material_ids: string[]
   group_id?: string | null
   duration_preference: DurationPreference
+  target_seconds?: number
+  speech_speed?: number
+  randomize_intro?: boolean
+  subtitle_position?: "high" | "mid" | "low"
   add_captions: boolean
   add_sfx: boolean
   add_subtitles?: boolean
@@ -76,6 +80,10 @@ export type BatchGeneratePayload = {
   count: number
   material_ids?: string[]
   duration_preference: DurationPreference
+  target_seconds?: number
+  speech_speed?: number
+  randomize_intro?: boolean
+  subtitle_position?: "high" | "mid" | "low"
   add_captions: boolean
   add_sfx: boolean
   add_subtitles?: boolean
@@ -211,8 +219,41 @@ export function fetchJobs() {
   return request<Job[]>("/api/jobs")
 }
 
+export function generateJobCovers(
+  jobId: string,
+  headline?: string,
+  count: number = 4,
+  style: CoverStyle = "yellow-red"
+) {
+  return request<Job>(`/api/jobs/${jobId}/covers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ headline, count, style }),
+  })
+}
+
 export function deleteJob(jobId: string) {
   return request<Job>(`/api/jobs/${jobId}`, { method: "DELETE" })
+}
+
+export async function exportJobsZip(jobIds: string[], includeCovers: boolean = true) {
+  const res = await fetch("/api/jobs/export-zip", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_ids: jobIds, include_covers: includeCovers }),
+  })
+  if (!res.ok) {
+    throw new Error("导出 ZIP 失败，请检查勾选的任务")
+  }
+  const blob = await res.blob()
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = `kuafa_export_${new Date().getTime()}.zip`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.URL.revokeObjectURL(url)
 }
 
 export async function uploadMaterial(file: File, groupId: string) {
