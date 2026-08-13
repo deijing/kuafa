@@ -11,19 +11,19 @@ from app.services import db as store
 from app.services.secrets import get_secret
 
 STYLE_HINTS = {
-    "yellow-red": "大字报黄底红字，高对比冲击感，电商爆款封面风格",
-    "black-yellow": "黑底金黄大字，高端促销感，强视觉锚点",
-    "red-white": "红底白字大标题，紧迫清仓感，直播带货封面",
-    "neon-cyber": "赛博朋克霓虹发光大字，炫酷科技感，潮流夜店电竞风格",
-    "clean-minimal": "极简莫兰迪配色，柔美质感文字，美妆护肤轻奢高级画风",
-    "festive-gold": "国潮喜庆金红配色，金色立体烫金大字，新春促销爆款风格",
+    "yellow-red": "小红书爆款海报风格，高明度黄红撞色大字，强吸引力商品美化摄影",
+    "black-yellow": "极简黑金高级感海报，精致光影摄影，极致商品质感与高级调性",
+    "red-white": "醒目红白吸引力大字，清新清爽通透光感，高颜值高转化封面海报",
+    "neon-cyber": "立体质感潮流文字，高级景深光影，强视觉冲击力与现代美学",
+    "clean-minimal": "轻奢莫兰迪极简风，柔光写真摄影，大牌杂志质感封面",
+    "festive-gold": "国潮奢华金红配色，高级立体光效，精美礼盒爆款视觉吸引",
 }
 
 VARIANT_ANGLES = [
-    "主标题居上，画面主体为服饰展示特写",
-    "主标题斜切贴纸效果，背景为直播间场景感",
-    "主标题居中偏上，突出价格冲击与紧迫感",
-    "主副标题分层，画面干净但信息密度高",
+    "主标题置顶醒目布局，画面主体为商品/人物高光特写美化，强化柔光与摄影画质",
+    "主标题贴纸造型，结合高颜值构图与微景深背景，提升画面吸引力与精致感",
+    "主副标题层次分明，画面通透精致，突出商品核心美感与高颜值细节特写",
+    "极简杂志封面构图，高级柔光摄影，干净利落的设计感与强吸引力展示",
 ]
 
 
@@ -96,12 +96,11 @@ class CoverJobManager:
         style = STYLE_HINTS.get(req.style, STYLE_HINTS["yellow-red"])
         angle = VARIANT_ANGLES[index % len(VARIANT_ANGLES)]
         return (
-            "生成一张中国电商直播短视频竖版封面图，适合抖音/小红书/视频号。"
-            f"必须醒目展示大字报文案：「{req.headline.strip()}」。"
-            f"文字样式要求：{style}。"
-            f"构图：{angle}。"
-            "画面要有真实带货直播感，服装/商品展示清晰，信息密度高，"
-            "不要水印，不要英文乱码，不要模糊，竖构图 3:4。"
+            "基于原图拍摄素材美化增质，生成一张高颜值、高吸引力的小红书/抖音短视频竖版精美封面海报。"
+            f"必须醒目展示大字报主题文案：「{req.headline.strip()}」。"
+            f"文字样式与视觉要求：{style}。"
+            f"构图样式：{angle}。"
+            "画面要求：纯净高质感摄影、光影通透、无杂乱直播间视觉、无低质噪声、强视觉吸引力，不要水印，不要英文乱码，竖构图 3:4。"
         )
 
     def _run(self, job_id: str, req: CoverRequest) -> None:
@@ -306,12 +305,12 @@ def generate_video_covers(
                 angle = VARIANT_ANGLES[i % len(VARIANT_ANGLES)]
                 prod_desc = f"商品类别与主题：「{group_name}」。" if group_name else ""
                 prompt = (
-                    "生成一张中国电商直播短视频竖版封面图，适合抖音/小红书/视频号。"
+                    "基于原图视频画面美化增质，生成一张高颜值、强吸引力的小红书/抖音短视频竖版封面海报。"
                     f"{prod_desc}"
-                    f"必须醒目展示大字报文案：「{text}」。"
-                    f"文字样式要求：{style_prompt}。"
-                    f"构图：{angle}。"
-                    "画面要有真实带货直播感，服装/商品展示清晰，信息密度高，竖构图 3:4。"
+                    f"必须醒目展示海报主题文案：「{text}」。"
+                    f"文字样式与画风：{style_prompt}。"
+                    f"构图要求：{angle}。"
+                    "画面要求：纯净高质感摄影、光影通透、无杂乱直播间痕迹、高吸引力与精致美感，竖构图 3:4。"
                 )
                 task_id = catsapi.create_image_task(prompt)
                 urls = catsapi.wait_for_images(task_id, timeout_seconds=90)

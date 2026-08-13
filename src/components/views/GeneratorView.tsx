@@ -231,7 +231,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
     try {
       const baseTitle = activeGroup
         ? `${activeGroup.name} · 带货成片`
-        : "限时特惠 · 直播带货成片"
+        : "限时特惠 · 爆款精选成片"
 
       if (countNum === 1) {
         const created = await createGenerateJob({

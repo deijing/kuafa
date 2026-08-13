@@ -49,7 +49,7 @@ const BUILTIN_PRESETS: CopyCategory[] = [
     name: "🔥 爆款清仓",
     items: [
       { headline: "破价清仓！最后100件，错过再等一年！", style: "yellow-red", label: "破价清仓" },
-      { headline: "买一送三，今晚直播间专属史低价！", style: "red-white", label: "买一送三" },
+      { headline: "买一送三！全网爆款热销，错过再等一年！", style: "red-white", label: "买一送三" },
       { headline: "全网最低价！工厂直发，无中间商赚差价！", style: "black-yellow", label: "工厂直发" },
     ],
   },
