@@ -139,21 +139,50 @@ class JobManager:
         return job
 
     def create_batch(self, req: BatchGenerateRequest) -> BatchGenerateOut:
-        """从同一文件夹并行创建多条差异化带货成片任务。"""
+        """从同一文件夹并行创建多条差异化带货成片任务。支持按 N 个素材分组切片缝合与乱序降重。"""
+        import math
+        import random
         from app.services.materials import get_group
 
         group = get_group(req.group_id)
-        material_ids = req.material_ids or [m.id for m in group.materials]
-        if not material_ids:
+        all_materials = req.material_ids or [m.id for m in group.materials]
+        if not all_materials:
             raise ValueError("该文件夹没有可用素材")
+
+        total_available = len(all_materials)
+        clips_per_video = req.clips_per_video
+
+        # 计算生成的任务条数：若用户设置了按 N 段切片，且素材充足，可自动计算条数
+        job_count = req.count
+        if clips_per_video and clips_per_video > 0 and total_available > clips_per_video:
+            chunk_count = math.ceil(total_available / clips_per_video)
+            if req.count == 1:
+                job_count = chunk_count
 
         base_title = req.title or f"{group.name} · 带货成片"
         created: list[JobOut] = []
-        for i in range(req.count):
-            title = base_title if req.count == 1 else f"{base_title} #{i + 1}"
+
+        for i in range(job_count):
+            title = base_title if job_count == 1 else f"{base_title} #{i + 1}"
+
+            # 1. 拆分素材组合 (Sub-chunking)
+            if clips_per_video and clips_per_video > 0 and clips_per_video < total_available:
+                start_idx = (i * clips_per_video) % total_available
+                selected_chunk = all_materials[start_idx : start_idx + clips_per_video]
+                if len(selected_chunk) < clips_per_video:
+                    needed = clips_per_video - len(selected_chunk)
+                    selected_chunk = selected_chunk + all_materials[:needed]
+            else:
+                selected_chunk = list(all_materials)
+
+            # 2. 随机打乱素材次序 (Randomize sequence for anti-repetition)
+            if req.shuffle_clips:
+                rng = random.Random(i * 1009 + 42 + (77 if req.deep_dedup else 0))
+                rng.shuffle(selected_chunk)
+
             job = self.create(
                 GenerateRequest(
-                    material_ids=material_ids,
+                    material_ids=selected_chunk,
                     group_id=req.group_id,
                     duration_preference=req.duration_preference,
                     target_seconds=req.target_seconds,
@@ -170,6 +199,9 @@ class JobManager:
                     mode=req.mode,
                     extract_rules=req.extract_rules,
                     variant_index=i,
+                    clips_per_video=req.clips_per_video,
+                    shuffle_clips=req.shuffle_clips,
+                    deep_dedup=req.deep_dedup,
                 )
             )
             created.append(job)

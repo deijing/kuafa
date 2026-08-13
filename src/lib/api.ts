@@ -73,6 +73,9 @@ export type GeneratePayload = {
   mode?: "sell" | "highlight"
   extract_rules?: Record<string, boolean>
   variant_index?: number
+  clips_per_video?: number | null
+  shuffle_clips?: boolean
+  deep_dedup?: boolean
 }
 
 export type BatchGeneratePayload = {
@@ -93,6 +96,9 @@ export type BatchGeneratePayload = {
   title?: string | null
   mode?: "sell" | "highlight"
   extract_rules?: Record<string, boolean>
+  clips_per_video?: number | null
+  shuffle_clips?: boolean
+  deep_dedup?: boolean
 }
 
 export type BatchGenerateResult = {

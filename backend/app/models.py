@@ -74,6 +74,12 @@ class GenerateRequest(BaseModel):
     extract_rules: dict[str, bool] | None = None
     # 批量成片：同素材池生成差异化版本（0=默认，1/2…换句序与侧重）
     variant_index: int = Field(default=0, ge=0, le=100)
+    # 每几段素材缝合生成 1 个长视频（如 5 段/条）
+    clips_per_video: int | None = Field(default=None, ge=1, le=50)
+    # 随机打乱素材顺序防重
+    shuffle_clips: bool = True
+    # 深度音视频降重防重 (微速/微剪/Hook重构)
+    deep_dedup: bool = True
 
 
 class BatchGenerateRequest(BaseModel):
@@ -96,6 +102,9 @@ class BatchGenerateRequest(BaseModel):
     title: str | None = None
     mode: Literal["sell", "highlight"] = "sell"
     extract_rules: dict[str, bool] | None = None
+    clips_per_video: int | None = Field(default=None, ge=1, le=50)
+    shuffle_clips: bool = True
+    deep_dedup: bool = True
 
 
 class JobStatus(str, Enum):

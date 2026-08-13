@@ -83,6 +83,10 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
   const [uploadingBgm, setUploadingBgm] = useState(false)
   const bgmFileInputRef = useRef<HTMLInputElement>(null)
 
+  const [clipsPerVideo, setClipsPerVideo] = useState<number | null>(5)
+  const [shuffleClips, setShuffleClips] = useState<boolean>(true)
+  const [deepDedup, setDeepDedup] = useState<boolean>(true)
+
   const [rules, setRules] = useState<Record<string, boolean>>(
     Object.fromEntries(extractRules.map((r) => [r.id, r.checked]))
   )
@@ -247,6 +251,9 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
           mode: "sell",
           extract_rules: rules,
           title: baseTitle,
+          clips_per_video: clipsPerVideo,
+          shuffle_clips: shuffleClips,
+          deep_dedup: deepDedup,
         })
         setJob(created)
         registerJobs([created])
@@ -271,6 +278,9 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
               extract_rules: rules,
               title: `${baseTitle} #${i + 1}`,
               variant_index: i,
+              clips_per_video: clipsPerVideo,
+              shuffle_clips: shuffleClips,
+              deep_dedup: deepDedup,
             })
           )
         )
@@ -492,6 +502,99 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                   <Switch
                     checked={randomizeIntro}
                     onCheckedChange={setRandomizeIntro}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Section: 素材分段缝合与降重 */}
+            <div>
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-2.5 flex items-center justify-between">
+                <span>素材分段缝合与防重</span>
+                <span className="text-[10px] font-semibold text-blue-600 dark:text-blue-400">
+                  智能降重算法
+                </span>
+              </h4>
+
+              <div className="flex flex-col gap-3.5">
+                {/* 每几段素材缝合一条 */}
+                <div className="flex flex-col gap-2 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                      每几段素材合成 1 条长视频
+                    </span>
+                    <span className="text-[11px] font-mono font-bold text-blue-600 dark:text-blue-400">
+                      {clipsPerVideo ? `每 ${clipsPerVideo} 段 / 条` : "使用全量素材"}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    素材较多时自动每 N 段切割生成一条独家长视频（如 20 段素材设「每 5 段」自动生成 4 条）。
+                  </p>
+
+                  <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setClipsPerVideo(null)}
+                      className={cn(
+                        "rounded-lg px-2.5 py-1 text-xs font-medium transition-all cursor-pointer border",
+                        clipsPerVideo === null
+                          ? "bg-blue-600 text-white border-blue-600"
+                          : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                      )}
+                    >
+                      全量素材
+                    </button>
+                    {[3, 5, 8, 10].map((num) => (
+                      <button
+                        key={num}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setClipsPerVideo(num)}
+                        className={cn(
+                          "rounded-lg px-2.5 py-1 text-xs font-medium transition-all cursor-pointer border",
+                          clipsPerVideo === num
+                            ? "bg-blue-600 text-white border-blue-600 shadow-2xs"
+                            : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100"
+                        )}
+                      >
+                        每 {num} 段
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 随机打乱素材顺序 */}
+                <div className="flex items-center justify-between py-1 px-1">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
+                      随机打乱片段顺序
+                    </span>
+                    <span className="text-[12px] text-[#9CA3AF] dark:text-slate-400">
+                      打乱拼接次序，打破原片结构
+                    </span>
+                  </div>
+                  <Switch
+                    checked={shuffleClips}
+                    onCheckedChange={setShuffleClips}
+                    disabled={busy}
+                  />
+                </div>
+
+                {/* 深度音视频降重 */}
+                <div className="flex items-center justify-between py-1 px-1">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium text-[#111827] dark:text-slate-200">
+                      深度音视频降重
+                    </span>
+                    <span className="text-[12px] text-[#9CA3AF] dark:text-slate-400">
+                      微剪采样、语速微扰与 Hook 重组
+                    </span>
+                  </div>
+                  <Switch
+                    checked={deepDedup}
+                    onCheckedChange={setDeepDedup}
+                    disabled={busy}
                   />
                 </div>
               </div>
