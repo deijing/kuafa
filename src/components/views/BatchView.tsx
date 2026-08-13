@@ -16,11 +16,12 @@ import {
   X,
   XCircle,
   Sparkles,
-  ExternalLink,
+  ZoomIn,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { ImagePreviewModal } from "@/components/ui/image-preview-modal"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
@@ -79,6 +80,16 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
   const [error, setError] = useState<string | null>(null)
   const [previewJobId, setPreviewJobId] = useState<string | null>(null)
   const userClearedRef = useRef(false)
+
+  const [previewImages, setPreviewImages] = useState<string[]>([])
+  const [previewIndex, setPreviewIndex] = useState(0)
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false)
+
+  const handleOpenPreview = (imgs: string[], index = 0) => {
+    setPreviewImages(imgs)
+    setPreviewIndex(index)
+    setIsPreviewOpen(true)
+  }
 
   const selectedGroups = useMemo(
     () => groups.filter((g) => selectedGroupIds.includes(g.id)),
@@ -1113,18 +1124,17 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
                               {coversList.map((c, idx) => (
                                 <div
                                   key={c.id || idx}
-                                  className="relative group size-11 shrink-0 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-900"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleOpenPreview(coversList.map((item) => item.url), idx)
+                                  }}
+                                  className="relative group size-11 shrink-0 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-900 cursor-pointer"
+                                  title="点击放大预览封面"
                                 >
                                   <img src={c.url} alt="" className="size-full object-cover" />
-                                  <a
-                                    href={c.url}
-                                    download={`cover_${index + 1}_${idx + 1}`}
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white"
-                                    title="下载此封面"
-                                  >
-                                    <Download className="size-3" />
-                                  </a>
+                                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                                    <ZoomIn className="size-3.5" />
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -1229,27 +1239,35 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
                         key={cover.id}
                         className="group relative flex flex-col rounded-xl border border-slate-800 bg-slate-950 p-2 transition-all hover:border-blue-500"
                       >
-                        <div className="relative aspect-[3/4] w-full overflow-hidden rounded-lg bg-slate-900">
+                        <div
+                          onClick={() => handleOpenPreview(previewJob.covers!.map((c) => c.url), idx)}
+                          className="relative aspect-[3/4] w-full overflow-hidden rounded-lg bg-slate-900 cursor-pointer"
+                          title="点击放大预览"
+                        >
                           <img
                             src={cover.url}
                             alt=""
                             className="h-full w-full object-cover transition-transform group-hover:scale-105"
                           />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white gap-1">
+                            <ZoomIn className="size-4" />
+                            <span className="text-xs font-semibold">放大预览</span>
+                          </div>
                         </div>
                         <div className="mt-2 flex items-center justify-between gap-1">
                           <span className="text-[10px] font-medium text-slate-400">
                             封面 #{idx + 1}
                           </span>
                           <div className="flex items-center gap-1">
-                            <a
-                              href={cover.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="p-1 text-slate-400 hover:text-slate-200 text-[10px] flex items-center gap-0.5"
-                              title="新窗口预览"
+                            <button
+                              type="button"
+                              onClick={() => handleOpenPreview(previewJob.covers!.map((c) => c.url), idx)}
+                              className="p-1 text-slate-400 hover:text-slate-200 text-[10px] flex items-center gap-0.5 cursor-pointer"
+                              title="放大预览"
                             >
-                              <ExternalLink className="size-3" />
-                            </a>
+                              <ZoomIn className="size-3" />
+                              预览
+                            </button>
                             <a
                               href={cover.url}
                               download={`cover_${idx + 1}`}
@@ -1300,6 +1318,14 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
           ) : null}
         </div>
       </div>
+
+      {/* Fullscreen Image Preview Lightbox Modal */}
+      <ImagePreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        images={previewImages}
+        initialIndex={previewIndex}
+      />
     </div>
   )
 }

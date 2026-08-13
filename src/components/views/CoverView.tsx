@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react"
-import { Bot, Check, Images, Loader2, Sparkles, Wand2 } from "lucide-react"
+import { Bot, Check, Images, Loader2, Sparkles, Wand2, ZoomIn } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { ImagePreviewModal } from "@/components/ui/image-preview-modal"
 import {
   Empty,
   EmptyDescription,
@@ -215,6 +216,16 @@ export function CoverView() {
     )
     .slice(0, 12)
 
+  const [previewImages, setPreviewImages] = useState<string[]>([])
+  const [previewIndex, setPreviewIndex] = useState(0)
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false)
+
+  const handleOpenPreview = (imgs: string[], index = 0) => {
+    setPreviewImages(imgs)
+    setPreviewIndex(index)
+    setIsPreviewOpen(true)
+  }
+
   return (
     <div className="flex h-full gap-8">
       {/* Settings Card */}
@@ -395,21 +406,22 @@ export function CoverView() {
             </div>
           ) : covers.length ? (
             <div className="grid grid-cols-2 gap-5 lg:grid-cols-4">
-              {covers.map((cover) => {
+              {covers.map((cover, idx) => {
                 const isSelected = selectedId === cover.id
                 return (
-                  <button
+                  <div
                     key={cover.id}
-                    type="button"
-                    onClick={() => setSelectedId(cover.id)}
                     className={cn(
-                      "group relative flex flex-col overflow-hidden rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-2 text-left transition-all shadow-xs hover:shadow-md cursor-pointer",
+                      "group relative flex flex-col overflow-hidden rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 p-2 text-left transition-all shadow-xs hover:shadow-md",
                       isSelected
                         ? "ring-2 ring-blue-600 ring-offset-2 dark:ring-offset-slate-950"
                         : "hover:border-slate-300"
                     )}
                   >
-                    <div className="relative aspect-[3/4] w-full overflow-hidden rounded-lg bg-slate-100 dark:bg-slate-800">
+                    <div
+                      onClick={() => setSelectedId(cover.id)}
+                      className="relative aspect-[3/4] w-full overflow-hidden rounded-lg bg-slate-100 dark:bg-slate-800 cursor-pointer"
+                    >
                       <img
                         src={cover.url}
                         alt=""
@@ -420,8 +432,23 @@ export function CoverView() {
                           <Check className="size-3.5" />
                         </div>
                       ) : null}
+
+                      {/* Hover Overlay with Zoom Button */}
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleOpenPreview(covers.map((c) => c.url), idx)
+                          }}
+                          className="flex items-center gap-1 rounded-full bg-white/90 dark:bg-slate-900/90 px-3 py-1.5 text-xs font-semibold text-slate-900 dark:text-slate-100 shadow-md hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                        >
+                          <ZoomIn className="size-3.5 text-blue-600" />
+                          放大预览
+                        </button>
+                      </div>
                     </div>
-                  </button>
+                  </div>
                 )
               })}
             </div>
@@ -447,10 +474,12 @@ export function CoverView() {
                 历史出图记录
               </h4>
               <div className="grid grid-cols-4 gap-3 lg:grid-cols-6">
-                {historyCovers.map((item) => (
+                {historyCovers.map((item, idx) => (
                   <div
                     key={item.id}
-                    className="group relative aspect-[3/4] overflow-hidden rounded-lg border border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-800"
+                    onClick={() => handleOpenPreview(historyCovers.map((h) => h.url), idx)}
+                    className="group relative aspect-[3/4] overflow-hidden rounded-lg border border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 cursor-pointer"
+                    title="点击放大预览"
                   >
                     <img
                       src={item.url}
@@ -469,6 +498,14 @@ export function CoverView() {
           ) : null}
         </CardContent>
       </Card>
+
+      {/* Fullscreen Image Preview Lightbox Modal */}
+      <ImagePreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        images={previewImages}
+        initialIndex={previewIndex}
+      />
     </div>
   )
 }

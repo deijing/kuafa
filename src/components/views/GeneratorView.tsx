@@ -14,11 +14,12 @@ import {
   WandSparkles,
   X,
   Sparkles,
-  ExternalLink,
+  ZoomIn,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { ImagePreviewModal } from "@/components/ui/image-preview-modal"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
@@ -89,6 +90,16 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const userClearedRef = useRef(false)
+
+  const [previewImages, setPreviewImages] = useState<string[]>([])
+  const [previewIndex, setPreviewIndex] = useState(0)
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false)
+
+  const handleOpenPreview = (imgs: string[], index = 0) => {
+    setPreviewImages(imgs)
+    setPreviewIndex(index)
+    setIsPreviewOpen(true)
+  }
 
   const { notify } = useNotifications()
 
@@ -797,27 +808,35 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                         key={cover.id}
                         className="group relative flex flex-col rounded-xl border border-slate-800 bg-slate-950 p-2 transition-all hover:border-blue-500"
                       >
-                        <div className="relative aspect-[3/4] w-full overflow-hidden rounded-lg bg-slate-900">
+                        <div
+                          onClick={() => handleOpenPreview(job.covers!.map((c) => c.url), idx)}
+                          className="relative aspect-[3/4] w-full overflow-hidden rounded-lg bg-slate-900 cursor-pointer"
+                          title="点击放大预览"
+                        >
                           <img
                             src={cover.url}
                             alt=""
                             className="h-full w-full object-cover transition-transform group-hover:scale-105"
                           />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white gap-1">
+                            <ZoomIn className="size-4" />
+                            <span className="text-xs font-semibold">放大预览</span>
+                          </div>
                         </div>
                         <div className="mt-2 flex items-center justify-between gap-1">
                           <span className="text-[10px] font-medium text-slate-400">
                             封面 #{idx + 1}
                           </span>
                           <div className="flex items-center gap-1">
-                            <a
-                              href={cover.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="p-1 text-slate-400 hover:text-slate-200 text-[10px] flex items-center gap-0.5"
-                              title="新窗口预览"
+                            <button
+                              type="button"
+                              onClick={() => handleOpenPreview(job.covers!.map((c) => c.url), idx)}
+                              className="p-1 text-slate-400 hover:text-slate-200 text-[10px] flex items-center gap-0.5 cursor-pointer"
+                              title="放大预览"
                             >
-                              <ExternalLink className="size-3" />
-                            </a>
+                              <ZoomIn className="size-3" />
+                              预览
+                            </button>
                             <a
                               href={cover.url}
                               download={`cover_${idx + 1}`}
@@ -855,6 +874,14 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
           ) : null}
         </div>
       </div>
+
+      {/* Fullscreen Image Preview Lightbox Modal */}
+      <ImagePreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        images={previewImages}
+        initialIndex={previewIndex}
+      />
     </div>
   )
 }

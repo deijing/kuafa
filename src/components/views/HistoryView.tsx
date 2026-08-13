@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react"
-import { Download, Loader2, Timeline, Trash2 } from "lucide-react"
+import { Download, Loader2, Timeline, Trash2, Image as ImageIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { ImagePreviewModal } from "@/components/ui/image-preview-modal"
 import {
   Empty,
   EmptyDescription,
@@ -113,6 +114,16 @@ export function HistoryView() {
     }
   }
 
+  const [previewImages, setPreviewImages] = useState<string[]>([])
+  const [previewIndex, setPreviewIndex] = useState(0)
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false)
+
+  const handleOpenPreview = (imgs: string[], index = 0) => {
+    setPreviewImages(imgs)
+    setPreviewIndex(index)
+    setIsPreviewOpen(true)
+  }
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-xs text-slate-400">
@@ -206,9 +217,21 @@ export function HistoryView() {
                             target="_blank"
                             rel="noreferrer"
                           >
-                            预览
+                            视频
                           </a>
                         </Button>
+                        {job.covers && job.covers.length > 0 ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleOpenPreview(job.covers!.map((c) => c.url))}
+                            className="h-7 text-xs px-2.5 border-amber-200 text-amber-700 bg-amber-50/60 dark:bg-amber-950/40 dark:border-amber-900 dark:text-amber-400 cursor-pointer gap-1"
+                          >
+                            <ImageIcon className="size-3 text-amber-500" />
+                            封面 ({job.covers.length})
+                          </Button>
+                        ) : null}
                         <Button size="sm" className="h-7 text-xs px-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium" asChild>
                           <a href={`/api/jobs/${job.id}/download`} download>
                             <Download className="mr-1 size-3" />
@@ -245,6 +268,14 @@ export function HistoryView() {
           })}
         </TableBody>
       </Table>
+
+      {/* Fullscreen Image Preview Lightbox Modal */}
+      <ImagePreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        images={previewImages}
+        initialIndex={previewIndex}
+      />
     </div>
   )
 }
