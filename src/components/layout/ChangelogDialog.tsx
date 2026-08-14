@@ -4,11 +4,9 @@ import {
   CheckCircle2,
   Copy,
   History,
-  Layers,
   Search,
   Sparkles,
   Tag,
-  Wand2,
   Zap,
 } from "lucide-react"
 
@@ -26,7 +24,6 @@ import {
   APP_VERSION,
   CHANGELOG_DATA,
   type ChangelogCategory,
-  type ChangelogItem,
 } from "@/data/changelog"
 import { cn } from "@/lib/utils"
 

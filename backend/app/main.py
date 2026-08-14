@@ -33,6 +33,10 @@ from app.models import (
     CatsAPITestOut,
     CoverJobOut,
     CoverRequest,
+    ExtractFrameOut,
+    ExtractFrameRequest,
+    ExtractHeadlinesOut,
+    ExtractHeadlinesRequest,
     JobCoverRequest,
     JobExportZipRequest,
     EnvCheckItem,
@@ -50,7 +54,9 @@ from app.models import (
     UpdateLibrarySettingsRequest,
 )
 from app.services import catsapi
-from app.services.covers import cover_jobs
+from app.services import db as store
+from app.services.covers import cover_jobs, extract_audio_headlines, extract_video_frame
+from app.services.ffmpeg_pipeline import probe
 from app.services.jobs import jobs
 from app.services.materials import (
     create_group,
@@ -519,6 +525,120 @@ async def upload_cover_reference(file: UploadFile = File(...)) -> dict[str, str]
         "filename": safe_name,
         "url": f"/api/media/covers/references/{safe_name}",
     }
+
+
+@app.post("/api/covers/extract-frame", response_model=ExtractFrameOut)
+def extract_frame_from_video(req: ExtractFrameRequest) -> ExtractFrameOut:
+    """从成片视频或素材视频中随机（或指定时间戳）提取高清截帧，用于图生图封面底图。"""
+    import random
+    import uuid
+    video_path: Path | None = None
+
+    if req.job_id:
+        job = jobs.get(req.job_id)
+        if job and job.output_path:
+            p = Path(job.output_path)
+            if p.exists():
+                video_path = p
+    elif req.material_id:
+        mat = store.get_material(req.material_id)
+        if mat and mat.path:
+            p = Path(mat.path)
+            if p.exists():
+                video_path = p
+    elif req.video_url:
+        if req.video_url.startswith("/api/outputs/"):
+            fname = req.video_url.split("/")[-1]
+            p = settings.outputs_dir / fname
+            if p.exists():
+                video_path = p
+        elif req.video_url.startswith("/api/materials/"):
+            parts = req.video_url.split("/")
+            if len(parts) >= 4 and parts[3] == "video":
+                mat_id = parts[2]
+                mat = store.get_material(mat_id)
+                if mat and mat.path and Path(mat.path).exists():
+                    video_path = Path(mat.path)
+        elif Path(req.video_url).exists():
+            video_path = Path(req.video_url)
+
+    if not video_path or not video_path.exists():
+        raise HTTPException(404, "未找到目标视频文件")
+
+    # 获取视频时长
+    try:
+        info = probe(video_path)
+        duration = info.duration
+    except Exception:
+        duration = 5.0
+
+    if req.timestamp is not None and req.timestamp >= 0:
+        ts = min(max(0.0, req.timestamp), max(0.1, duration - 0.1))
+    else:
+        # 随机抽取时间戳（避开开头和结尾）
+        if duration > 1.5:
+            ts = round(random.uniform(min(0.5, duration * 0.08), max(0.5, duration * 0.92)), 2)
+        else:
+            ts = round(duration * 0.5, 2)
+
+    ref_dir = settings.covers_dir / "references"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    frame_name = f"frame_{uuid.uuid4().hex[:8]}.jpg"
+    dest = ref_dir / frame_name
+
+    if not extract_video_frame(video_path, ts, dest):
+        raise HTTPException(500, "视频截帧提取失败，请重试")
+
+    return ExtractFrameOut(
+        url=f"/api/media/covers/references/{frame_name}",
+        filename=frame_name,
+        timestamp=ts,
+        duration=duration,
+    )
+
+
+@app.post("/api/covers/extract-headlines", response_model=ExtractHeadlinesOut)
+def extract_headlines(req: ExtractHeadlinesRequest) -> ExtractHeadlinesOut:
+    """根据视频音频口播或文本，智能分析提炼多条高转化爆款大字报标语。"""
+    video_path: Path | None = None
+    group_name = req.group_name
+
+    if req.job_id:
+        job = store.get_generate_job(req.job_id)
+        if job and job.output_path and Path(job.output_path).exists():
+            video_path = Path(job.output_path)
+            if not group_name and job.group_id:
+                grp = store.get_group(job.group_id)
+                if grp:
+                    group_name = grp.name
+    elif req.material_id:
+        mat = store.get_material(req.material_id)
+        if mat and mat.path and Path(mat.path).exists():
+            video_path = Path(mat.path)
+            if not group_name and mat.group_id:
+                grp = store.get_group(mat.group_id)
+                if grp:
+                    group_name = grp.name
+    elif req.video_url:
+        if req.video_url.startswith("/api/outputs/"):
+            fname = req.video_url.split("/")[-1]
+            video_path = settings.outputs_dir / fname
+        elif req.video_url.startswith("/api/materials/"):
+            parts = req.video_url.split("/")
+            if len(parts) >= 4:
+                mat = store.get_material(parts[3])
+                if mat and mat.path and Path(mat.path).exists():
+                    video_path = Path(mat.path)
+        elif Path(req.video_url).exists():
+            video_path = Path(req.video_url)
+
+    headlines = extract_audio_headlines(
+        audio_transcript=req.audio_text,
+        video_path=video_path,
+        group_name=group_name,
+        count=4,
+    )
+    return ExtractHeadlinesOut(headlines=headlines)
 
 
 @app.post("/api/covers/generate", response_model=CoverJobOut)

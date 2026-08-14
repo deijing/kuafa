@@ -1439,7 +1439,7 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
                                     handleOpenPreview(coversList.map((item) => item.url), idx)
                                   }}
                                   className="relative group size-11 shrink-0 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-900 cursor-pointer"
-                                  title="点击放大预览封面"
+                                  title={c.headline ? `【${c.headline}】· 点击放大预览` : "点击放大预览封面"}
                                 >
                                   <img src={c.url} alt="" className="size-full object-cover" />
                                   <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">

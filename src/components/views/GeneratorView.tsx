@@ -1050,6 +1050,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                           headline: job.headline || (activeGroup ? `${activeGroup.name} 爆款特惠！限时抢购` : "爆款特惠！限时抢购，错过再等一年！"),
                           title: targetTitle,
                           sourceJobId: job.id,
+                          videoUrl: job.output_url,
                         },
                       })
                     }}

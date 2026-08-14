@@ -147,6 +147,32 @@ class JobCoverRequest(BaseModel):
     count: int = Field(default=3, ge=1, le=3)
 
 
+class ExtractFrameRequest(BaseModel):
+    video_url: str | None = None
+    job_id: str | None = None
+    material_id: str | None = None
+    timestamp: float | None = None
+
+
+class ExtractFrameOut(BaseModel):
+    url: str
+    filename: str
+    timestamp: float
+    duration: float
+
+
+class ExtractHeadlinesRequest(BaseModel):
+    video_url: str | None = None
+    job_id: str | None = None
+    material_id: str | None = None
+    audio_text: str | None = None
+    group_name: str | None = None
+
+
+class ExtractHeadlinesOut(BaseModel):
+    headlines: list[str] = Field(default_factory=list)
+
+
 class JobExportZipRequest(BaseModel):
     job_ids: list[str] = Field(min_length=1)
     include_covers: bool = True
@@ -156,6 +182,7 @@ class CoverResult(BaseModel):
     id: str
     url: str
     remote_url: str | None = None
+    headline: str | None = None
 
 
 class CoverJobOut(BaseModel):

@@ -236,6 +236,7 @@ export function HistoryView() {
                                 headline: job.headline || (job.group_id && groupById.get(job.group_id) ? `${groupById.get(job.group_id)} 爆款特惠！限时抢购` : "爆款特惠！限时抢购，错过再等一年！"),
                                 title: jobTitle,
                                 sourceJobId: job.id,
+                                videoUrl: job.output_url,
                               },
                             })
                           }}

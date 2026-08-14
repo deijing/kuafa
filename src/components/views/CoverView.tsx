@@ -13,7 +13,6 @@ import {
   Image as ImageIcon,
   ImagePlus,
   Images,
-  Layers,
   Loader2,
   Palette,
   PenTool,
@@ -22,11 +21,9 @@ import {
   Shirt,
   ShoppingBag,
   SlidersHorizontal,
-  Smartphone,
   Sparkles,
   Tag,
   Trash2,
-  Type,
   UploadCloud,
   Wand2,
   X,
@@ -44,12 +41,13 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Textarea } from "@/components/ui/textarea"
 import {
   clearCoverJobs,
   createCoverJob,
   deleteCoverResult,
+  extractCoverFrame,
+  extractCoverHeadlines,
   fetchCoverJob,
   fetchCoverJobs,
   uploadCoverReference,
@@ -72,44 +70,44 @@ const textStyles: {
 }[] = [
   {
     id: "yellow-red",
-    label: "黄红爆款",
-    desc: "高明度撞色 · 吸睛转化",
-    colors: "from-amber-400 via-orange-500 to-red-600",
+    label: "高明度黄红",
+    desc: "爆款首选 · 强视觉吸睛",
+    colors: "from-amber-400 via-rose-500 to-red-600",
     previewClass: "bg-amber-400 text-red-600 border-amber-500/60 font-black",
   },
   {
     id: "black-yellow",
-    label: "黑金高端",
-    desc: "黑金奢华 · 旗舰质感",
-    colors: "from-zinc-900 via-amber-700 to-yellow-400",
+    label: "极简黑金",
+    desc: "品质高级 · 奢华质感",
+    colors: "from-yellow-300 via-amber-500 to-yellow-600",
     previewClass: "bg-zinc-950 text-amber-300 border-amber-400/40 font-black",
   },
   {
     id: "red-white",
-    label: "红白秒杀",
-    desc: "大促醒目 · 破价热销",
-    colors: "from-red-600 to-rose-400",
+    label: "醒目红白",
+    desc: "通透光感 · 促销转化",
+    colors: "from-rose-500 via-red-500 to-rose-600",
     previewClass: "bg-red-600 text-white border-red-700 font-black",
   },
   {
     id: "neon-cyber",
     label: "赛博霓虹",
-    desc: "科技潮流 · 光效景深",
-    colors: "from-purple-900 via-cyan-600 to-teal-400",
+    desc: "立体光效 · 潮流前卫",
+    colors: "from-cyan-400 via-fuchsia-500 to-purple-600",
     previewClass: "bg-purple-950 text-cyan-300 border-cyan-500/40 font-black",
   },
   {
     id: "clean-minimal",
-    label: "极简素雅",
-    desc: "莫兰迪柔光 · 大牌质感",
-    colors: "from-stone-300 to-stone-600",
+    label: "轻奢莫兰迪",
+    desc: "柔光写真 · 大牌杂志",
+    colors: "from-stone-300 via-warm-gray-400 to-stone-500",
     previewClass: "bg-stone-100 text-stone-800 border-stone-300 dark:bg-stone-800 dark:text-stone-100 font-bold",
   },
   {
     id: "festive-gold",
-    label: "国潮烫金",
-    desc: "新年礼盒 · 奢华烫金",
-    colors: "from-red-800 via-amber-600 to-amber-300",
+    label: "国潮金红",
+    desc: "喜庆热销 · 尊贵质感",
+    colors: "from-red-600 via-amber-500 to-yellow-400",
     previewClass: "bg-red-950 text-amber-300 border-amber-500/60 font-black",
   },
 ]
@@ -177,7 +175,11 @@ type RefImage = {
   url: string
   title: string
   filename: string
-  source: "upload" | "material"
+  source: "upload" | "material" | "video_job"
+  sourceJobId?: string
+  materialId?: string
+  videoUrl?: string
+  timestamp?: number
 }
 
 export function CoverView() {
@@ -187,6 +189,9 @@ export function CoverView() {
   const [activeCategory, setActiveCategory] = useState<number>(0)
   const [refImage, setRefImage] = useState<RefImage | null>(null)
   const [isUploadingRef, setIsUploadingRef] = useState(false)
+  const [isExtractingFrame, setIsExtractingFrame] = useState(false)
+  const [isExtractingHeadlines, setIsExtractingHeadlines] = useState(false)
+  const [extractedHeadlines, setExtractedHeadlines] = useState<string[]>([])
   const [showMaterialPicker, setShowMaterialPicker] = useState(false)
   const [sourceVideoTitle, setSourceVideoTitle] = useState<string | null>(null)
 
@@ -217,25 +222,79 @@ export function CoverView() {
       mode?: CoverMode
       title?: string
       sourceJobId?: string
+      videoUrl?: string
     } | null
 
     if (state) {
       if (state.headline) setHeadline(state.headline)
       if (state.title) setSourceVideoTitle(state.title)
-      if (state.refImageUrl) {
-        setMode("img2img")
+      setMode("img2img")
+
+      if (state.sourceJobId || state.videoUrl) {
+        setIsExtractingFrame(true)
+        void extractCoverFrame({
+          job_id: state.sourceJobId,
+          video_url: state.videoUrl,
+        })
+          .then((res) => {
+            setRefImage({
+              url: res.url,
+              title: state.title || "成片随机截帧",
+              filename: res.filename,
+              source: "video_job",
+              sourceJobId: state.sourceJobId,
+              videoUrl: state.videoUrl,
+              timestamp: res.timestamp,
+            })
+          })
+          .catch(() => {
+            if (state.refImageUrl) {
+              setRefImage({
+                url: state.refImageUrl,
+                title: state.title || "成片截帧",
+                filename: "video_frame.jpg",
+                source: "video_job",
+                sourceJobId: state.sourceJobId,
+                videoUrl: state.videoUrl,
+              })
+            }
+          })
+          .finally(() => {
+            setIsExtractingFrame(false)
+          })
+
+        // 自动从成片音频口播提炼爆款文案建议
+        setIsExtractingHeadlines(true)
+        void extractCoverHeadlines({
+          job_id: state.sourceJobId,
+          video_url: state.videoUrl,
+        })
+          .then((hRes) => {
+            if (hRes.headlines && hRes.headlines.length > 0) {
+              setExtractedHeadlines(hRes.headlines)
+              if (!state.headline) {
+                setHeadline(hRes.headlines[0])
+              }
+            }
+          })
+          .catch(() => {
+            /* ignore */
+          })
+          .finally(() => {
+            setIsExtractingHeadlines(false)
+          })
+      } else if (state.refImageUrl) {
         setRefImage({
           url: state.refImageUrl,
-          title: state.title || "成片截帧",
+          title: state.title || "参考截帧",
           filename: "video_frame.jpg",
           source: "material",
         })
-      } else if (state.mode) {
-        setMode(state.mode)
       }
+
       notify({
         title: "已载入成片信息",
-        message: `已自动载入「${state.title || "目标成片"}」的视频画面与卖点文案`,
+        message: `已自动载入「${state.title || "目标成片"}」的真实画面与音频卖点，可直接图生图生成高关联封面`,
         type: "info",
       })
     }
@@ -246,6 +305,7 @@ export function CoverView() {
     setHeadline("")
     setRefImage(null)
     setSourceVideoTitle(null)
+    setExtractedHeadlines([])
     setSize("1024x1536")
     setCount(4)
     setQuality("auto")
@@ -312,6 +372,79 @@ export function CoverView() {
     return () => window.clearInterval(timer)
   }, [job, notify])
 
+  const handleExtractAudioHeadlines = async () => {
+    if (!refImage && !sourceVideoTitle) {
+      notify({
+        title: "请先选择视频素材",
+        message: "请先从素材库选帧或从成片跳转，以提取视频音频口播文案",
+        type: "info",
+      })
+      return
+    }
+    setIsExtractingHeadlines(true)
+    try {
+      const res = await extractCoverHeadlines({
+        job_id: refImage?.sourceJobId,
+        material_id: refImage?.materialId,
+        video_url: refImage?.videoUrl,
+      })
+      if (res.headlines && res.headlines.length > 0) {
+        setExtractedHeadlines(res.headlines)
+        setHeadline(res.headlines[0])
+        notify({
+          title: "已提炼视频音频爆款大字",
+          message: `成功提炼出 ${res.headlines.length} 条高转化大字报标语，已填入主标题！`,
+          type: "success",
+        })
+      } else {
+        notify({
+          title: "未能从音频提炼到有效标语",
+          message: "请检查视频是否有清晰口播或尝试输入文案",
+          type: "info",
+        })
+      }
+    } catch (err) {
+      notify({
+        title: "提炼失败",
+        message: err instanceof Error ? err.message : "音频转写提炼异常",
+        type: "error",
+      })
+    } finally {
+      setIsExtractingHeadlines(false)
+    }
+  }
+
+  const handleRandomizeFrame = async () => {
+    if (!refImage) return
+    setIsExtractingFrame(true)
+    try {
+      const res = await extractCoverFrame({
+        job_id: refImage.sourceJobId,
+        material_id: refImage.materialId,
+        video_url: refImage.videoUrl,
+      })
+      setRefImage({
+        ...refImage,
+        url: res.url,
+        filename: res.filename,
+        timestamp: res.timestamp,
+      })
+      notify({
+        title: "已重新随机截取视频画面",
+        message: `已截取视频第 ${res.timestamp}s 画面作为图生图参考底图`,
+        type: "success",
+      })
+    } catch (err) {
+      notify({
+        title: "截帧失败",
+        message: err instanceof Error ? err.message : "无法从视频截取画面",
+        type: "error",
+      })
+    } finally {
+      setIsExtractingFrame(false)
+    }
+  }
+
   async function handleFileUpload(file: File) {
     if (!file) return
     setIsUploadingRef(true)
@@ -341,20 +474,45 @@ export function CoverView() {
     }
   }
 
-  function handleSelectMaterial(mat: (typeof materials)[0]) {
-    const targetUrl = mat.thumb_url || `/api/materials/${mat.id}/video`
-    setRefImage({
-      url: targetUrl,
-      title: mat.title || mat.filename,
-      filename: mat.filename,
-      source: "material",
-    })
+  async function handleSelectMaterial(mat: (typeof materials)[0]) {
     setShowMaterialPicker(false)
-    notify({
-      title: "已选择素材底图",
-      message: `已将素材「${mat.title || mat.filename}」作为图生图参考底图`,
-      type: "success",
-    })
+    setIsExtractingFrame(true)
+    try {
+      const res = await extractCoverFrame({ material_id: mat.id })
+      setRefImage({
+        url: res.url,
+        title: mat.title || mat.filename,
+        filename: res.filename,
+        source: "material",
+        materialId: mat.id,
+        timestamp: res.timestamp,
+      })
+      notify({
+        title: "已从素材视频随机截帧",
+        message: `已随机采样素材「${mat.title || mat.filename}」第 ${res.timestamp}s 作为参考底图`,
+        type: "success",
+      })
+      // 异步提炼该素材视频的口播大字
+      void extractCoverHeadlines({ material_id: mat.id }).then((hRes) => {
+        if (hRes.headlines && hRes.headlines.length > 0) {
+          setExtractedHeadlines(hRes.headlines)
+          if (!headline) {
+            setHeadline(hRes.headlines[0])
+          }
+        }
+      })
+    } catch (err) {
+      const targetUrl = mat.thumb_url || `/api/materials/${mat.id}/video`
+      setRefImage({
+        url: targetUrl,
+        title: mat.title || mat.filename,
+        filename: mat.filename,
+        source: "material",
+        materialId: mat.id,
+      })
+    } finally {
+      setIsExtractingFrame(false)
+    }
   }
 
   async function generate() {
@@ -486,6 +644,7 @@ export function CoverView() {
       )
       notify({
         title: "已删除封面",
+        message: "该封面已成功从列表中移除",
         type: "success",
       })
     } catch (err) {
@@ -613,7 +772,7 @@ export function CoverView() {
                 01 · 生成方式
               </span>
               <span className="text-[11px] text-slate-400">
-                {mode === "text2img" ? "文案构图出图" : "底图增质重绘"}
+                {mode === "text2img" ? "文案构图出图" : "视频帧/底图重绘"}
               </span>
             </div>
             <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100/80 dark:bg-slate-800/60 rounded-2xl border border-slate-200/60 dark:border-slate-700/60">
@@ -657,7 +816,7 @@ export function CoverView() {
                 </div>
                 <div className="min-w-0">
                   <div className="text-xs font-bold leading-tight">图生成 (图生图)</div>
-                  <div className="text-[10px] text-slate-400 font-normal truncate mt-0.5">参考底图视觉重绘</div>
+                  <div className="text-[10px] text-slate-400 font-normal truncate mt-0.5">视频抽帧/底图重绘</div>
                 </div>
               </button>
             </div>
@@ -669,7 +828,7 @@ export function CoverView() {
               <div className="flex items-center justify-between mb-1">
                 <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
                   <ImageIcon className="size-3.5 text-purple-600" />
-                  参考底图 (商品/主播实拍)
+                  参考底图 (带货商品/主播真实画面)
                 </span>
                 {materials.length > 0 && (
                   <button
@@ -684,37 +843,75 @@ export function CoverView() {
               </div>
 
               {refImage ? (
-                <div className="flex items-center gap-3 p-3 rounded-xl bg-white dark:bg-slate-900 border border-purple-200/60 dark:border-purple-800/40 shadow-xs">
-                  <img
-                    src={refImage.url}
-                    alt={refImage.title}
-                    className="size-14 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-100"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-                      {refImage.title}
-                    </p>
-                    <span className="inline-flex items-center gap-1 mt-1 rounded-md bg-purple-50 dark:bg-purple-950/60 px-2 py-0.5 text-[10px] font-semibold text-purple-700 dark:text-purple-300 border border-purple-200/60">
-                      <CheckCircle2 className="size-2.5" />
-                      {refImage.source === "material" ? "素材库抽帧" : "本地上传原图"}
-                    </span>
+                <div className="flex flex-col gap-2 p-3 rounded-xl bg-white dark:bg-slate-900 border border-purple-200/60 dark:border-purple-800/40 shadow-xs">
+                  <div className="flex items-center gap-3">
+                    <div className="relative size-14 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-100">
+                      <img
+                        src={refImage.url}
+                        alt={refImage.title}
+                        className="size-full object-cover"
+                      />
+                      {isExtractingFrame && (
+                        <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white">
+                          <Loader2 className="size-4 animate-spin" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                        {refImage.title}
+                      </p>
+                      <div className="flex items-center gap-1 mt-1 flex-wrap">
+                        <span className="inline-flex items-center gap-1 rounded-md bg-purple-50 dark:bg-purple-950/60 px-2 py-0.5 text-[10px] font-semibold text-purple-700 dark:text-purple-300 border border-purple-200/60">
+                          <CheckCircle2 className="size-2.5" />
+                          {refImage.source === "video_job"
+                            ? `成片视频截帧${refImage.timestamp ? ` (${refImage.timestamp}s)` : ""}`
+                            : refImage.source === "material"
+                            ? `素材视频截帧${refImage.timestamp ? ` (${refImage.timestamp}s)` : ""}`
+                            : "本地上传原图"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold cursor-pointer"
+                      >
+                        更换
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRefImage(null)}
+                        className="text-[11px] text-rose-500 hover:text-rose-600 font-semibold cursor-pointer"
+                      >
+                        移除
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex flex-col gap-1 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold cursor-pointer"
-                    >
-                      更换
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRefImage(null)}
-                      className="text-[11px] text-rose-500 hover:text-rose-600 font-semibold cursor-pointer"
-                    >
-                      移除
-                    </button>
-                  </div>
+
+                  {(refImage.source === "video_job" || refImage.source === "material" || refImage.sourceJobId || refImage.materialId || refImage.videoUrl) && (
+                    <div className="flex items-center justify-between pt-2 border-t border-purple-100 dark:border-purple-900/40">
+                      <span className="text-[10px] text-slate-400">
+                        换个画面？从当前视频中换一帧
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={isExtractingFrame}
+                        onClick={() => void handleRandomizeFrame()}
+                        className="h-6 px-2 text-[10px] font-bold text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800 bg-purple-50/50 hover:bg-purple-100 dark:bg-purple-950/60 dark:hover:bg-purple-900/80 rounded-lg flex items-center gap-1 cursor-pointer"
+                      >
+                        {isExtractingFrame ? (
+                          <Loader2 className="size-2.5 animate-spin" />
+                        ) : (
+                          <Dices className="size-2.5 text-purple-600" />
+                        )}
+                        <span>🎲 随机换一帧</span>
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div
@@ -737,10 +934,12 @@ export function CoverView() {
                       if (file) void handleFileUpload(file)
                     }}
                   />
-                  {isUploadingRef ? (
+                  {isUploadingRef || isExtractingFrame ? (
                     <div className="flex flex-col items-center gap-2 py-2 text-purple-600">
                       <Loader2 className="size-6 animate-spin" />
-                      <span className="text-xs font-medium">正在导入底图…</span>
+                      <span className="text-xs font-medium">
+                        {isExtractingFrame ? "正在从视频中随机截取高光帧…" : "正在导入底图…"}
+                      </span>
                     </div>
                   ) : (
                     <>
@@ -748,10 +947,10 @@ export function CoverView() {
                         <UploadCloud className="size-5" />
                       </div>
                       <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                        点击或拖拽上传商品/人物实拍图
+                        点击或拖拽上传商品/主播实拍图
                       </p>
                       <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
-                        支持 JPG, PNG, WebP · AI 将基于此图重绘封面
+                        支持 JPG, PNG, WebP · AI 将根据该帧画面进行图生图保真重绘
                       </p>
                     </>
                   )}
@@ -767,15 +966,68 @@ export function CoverView() {
                 <Bookmark className="size-3.5 text-slate-400" />
                 02 · 爆款大字报文案
               </span>
-              <button
-                type="button"
-                onClick={fillRandomPreset}
-                className="group flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-700 dark:text-blue-400 font-semibold cursor-pointer transition-colors"
-              >
-                <Dices className="size-3.5 text-blue-500 group-hover:rotate-180 transition-transform duration-300" />
-                随机爆款
-              </button>
+              <div className="flex items-center gap-2">
+                {(refImage?.source === "video_job" || refImage?.source === "material" || refImage?.sourceJobId || refImage?.materialId || refImage?.videoUrl) && (
+                  <button
+                    type="button"
+                    disabled={isExtractingHeadlines}
+                    onClick={() => void handleExtractAudioHeadlines()}
+                    className="group flex items-center gap-1 text-[11px] text-purple-600 hover:text-purple-700 dark:text-purple-400 font-semibold cursor-pointer transition-colors"
+                    title="AI 智能分析成片音频口播，提炼出最高点击率的大字报标语"
+                  >
+                    {isExtractingHeadlines ? (
+                      <Loader2 className="size-3.5 animate-spin text-purple-500" />
+                    ) : (
+                      <Sparkles className="size-3.5 text-purple-500 group-hover:scale-110 transition-transform" />
+                    )}
+                    <span>🎙️ 音频智能提炼</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={fillRandomPreset}
+                  className="group flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-700 dark:text-blue-400 font-semibold cursor-pointer transition-colors"
+                >
+                  <Dices className="size-3.5 text-blue-500 group-hover:rotate-180 transition-transform duration-300" />
+                  随机爆款
+                </button>
+              </div>
             </div>
+
+            {/* Extracted Audio Headlines Recommendation Chips */}
+            {extractedHeadlines.length > 0 && (
+              <div className="flex flex-col gap-1.5 p-2.5 rounded-xl bg-purple-50/70 dark:bg-purple-950/40 border border-purple-200/80 dark:border-purple-900/60">
+                <div className="flex items-center justify-between text-[11px] font-bold text-purple-800 dark:text-purple-300">
+                  <span className="flex items-center gap-1">
+                    <Sparkles className="size-3 text-purple-600" />
+                    基于成片音频口播提炼的高转化标语
+                  </span>
+                  <span className="text-[10px] text-purple-600/70 font-normal">点击快速替换</span>
+                </div>
+                <div className="flex flex-col gap-1">
+                  {extractedHeadlines.map((h, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setHeadline(h)}
+                      className={cn(
+                        "flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-all cursor-pointer font-medium",
+                        headline === h
+                          ? "bg-purple-600 text-white shadow-2xs font-bold"
+                          : "bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 border border-purple-200/60 dark:border-purple-800/40 hover:border-purple-400"
+                      )}
+                    >
+                      <span className="truncate">{h}</span>
+                      {headline === h ? (
+                        <Check className="size-3 shrink-0 ml-1.5" />
+                      ) : (
+                        <span className="text-[10px] text-purple-500 shrink-0 ml-1.5 font-normal">方案 #{i + 1}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Category Selector Tabs */}
             <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
@@ -1183,6 +1435,13 @@ export function CoverView() {
                         </a>
                       </div>
                     </div>
+                    {cover.headline && (
+                      <div className="mt-1.5 px-0.5">
+                        <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200 truncate" title={cover.headline}>
+                          {cover.headline}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )
               })}

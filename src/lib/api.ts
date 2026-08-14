@@ -121,6 +121,7 @@ export type CoverResult = {
   id: string
   url: string
   remote_url: string | null
+  headline?: string | null
 }
 
 export type CoverJob = {
@@ -292,6 +293,48 @@ export async function uploadCoverReference(file: File) {
   return request<{ filename: string; url: string }>("/api/covers/upload-reference", {
     method: "POST",
     body: form,
+  })
+}
+
+export type ExtractFramePayload = {
+  video_url?: string | null
+  job_id?: string | null
+  material_id?: string | null
+  timestamp?: number | null
+}
+
+export type ExtractFrameResult = {
+  url: string
+  filename: string
+  timestamp: number
+  duration: number
+}
+
+export function extractCoverFrame(payload: ExtractFramePayload) {
+  return request<ExtractFrameResult>("/api/covers/extract-frame", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export type ExtractHeadlinesPayload = {
+  video_url?: string | null
+  job_id?: string | null
+  material_id?: string | null
+  audio_text?: string | null
+  group_name?: string | null
+}
+
+export type ExtractHeadlinesResult = {
+  headlines: string[]
+}
+
+export function extractCoverHeadlines(payload: ExtractHeadlinesPayload) {
+  return request<ExtractHeadlinesResult>("/api/covers/extract-headlines", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   })
 }
 

@@ -326,37 +326,37 @@ class JobManager:
                     on_progress=on_progress,
                 )
 
-            # 自动基于本成片视频提取卖点，生成配套封面大字报
-            headline_text = ""
-            if req.mode == "sell":
-                if magic_cues and len(magic_cues) > 0:
-                    headline_text = magic_cues[0].text
-                elif plan and len(plan) > 0:
-                    headline_text = plan[0].text
-            if not headline_text:
-                headline_text = req.title or "爆款切片 极速出片"
+            # 自动基于成片实际音频口播提取核心卖点，智能生成配套封面大字报
+            audio_sentences = []
+            if req.mode == "sell" and plan:
+                audio_sentences = [clip.text.strip() for clip in plan if clip.text.strip()]
+            elif magic_cues:
+                audio_sentences = [cue.text.strip() for cue in magic_cues if cue.text.strip()]
 
             group = store.get_group(req.group_id) if req.group_id else None
             group_name = group.name if group else None
 
-            on_progress(94, "基于视频真实画面与核心卖点生成强关联爆款封面…")
+            on_progress(94, "基于视频音频口播智能提炼爆款文案，生成强关联封面…")
             try:
                 covers = generate_video_covers(
-                    headline=headline_text,
+                    headline=None if req.mode == "sell" else req.title,
                     job_id=job_id,
                     video_path=out_path,
+                    audio_transcript=audio_sentences,
                     group_name=group_name,
                     count=3,
                 )
             except Exception:
                 covers = []
 
+            final_headline = (covers[0].headline if covers and covers[0].headline else None) or req.title or "爆款带货 极速出片"
+
             self._update(
                 job_id,
                 status=JobStatus.succeeded,
                 progress=100,
                 message="成片及封面生成完成",
-                headline=headline_text,
+                headline=final_headline,
                 covers=covers,
                 finished_at=datetime.now(timezone.utc).isoformat(),
                 output_url=f"/api/outputs/{job_id}.mp4",
@@ -392,7 +392,7 @@ class JobManager:
             job = store.get_generate_job(job_id)
             if not job:
                 raise KeyError("任务不存在")
-            target_headline = (headline or job.headline or "爆款带货 极速出片").strip()
+            target_headline = (headline or job.headline or "").strip() or None
             video_path = Path(job.output_path) if job.output_path else None
             group_name = None
             if job.group_id:
@@ -406,9 +406,11 @@ class JobManager:
             job_id=job_id,
             video_path=video_path,
             group_name=group_name,
-            count=3,
+            count=count,
             style=style,
         )
+
+        final_headline = (new_covers[0].headline if new_covers and new_covers[0].headline else None) or target_headline or "爆款带货 极速出片"
 
         # 3. 更新数据库记录时再次加锁（统一只保留 3 张全新封面）
         with self._lock:
@@ -418,7 +420,7 @@ class JobManager:
             updated_covers = new_covers[:3]
             updated_job = job.model_copy(
                 update={
-                    "headline": target_headline,
+                    "headline": final_headline,
                     "covers": updated_covers,
                 }
             )

@@ -59,8 +59,9 @@ def create_image_task(
 
     # Reference images support
     if image_base64:
+        clean_b64 = image_base64.split(",", 1)[-1] if "," in image_base64 else image_base64
         payload["files"] = {
-            "referenceImages": [{"base64": image_base64, "name": "reference.png"}]
+            "referenceImages": [{"base64": clean_b64, "name": "reference.jpg"}]
         }
         payload["input_images"] = [image_base64]
     elif input_images:
