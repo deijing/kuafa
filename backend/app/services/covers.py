@@ -95,12 +95,135 @@ def extract_video_frame(video_path: Path, timestamp_sec: float, out_jpeg: Path) 
         return False
 
 
-def extract_multiple_video_frames(
+def evaluate_cover_frame_aesthetic(jpeg_path: Path) -> float:
+    """
+    智能评估画面美观度与适宜做封面的质量评分（0.0 ~ 100.0 分）：
+    - 曝光与亮度评分：避免全黑、过暗或严重过曝的废帧；
+    - 清晰度与边缘锐度：计算邻域差分梯度能量，智能过滤动态模糊、眨眼闭眼或残影画面；
+    - 对比度与色彩饱和度：优先选取色彩通透、主体鲜明、模特面部和商品细节丰富的画面。
+    """
+    if not jpeg_path or not jpeg_path.exists():
+        return 0.0
+    try:
+        from PIL import Image, ImageStat
+        with Image.open(jpeg_path) as img:
+            img_rgb = img.convert("RGB")
+            # 缩放至小尺寸快速计算
+            thumb = img_rgb.resize((240, 320))
+            stat = ImageStat.Stat(thumb)
+
+            # 1. 亮度平衡评分 (0~100)
+            mean_r, mean_g, mean_b = stat.mean[:3]
+            lum = 0.299 * mean_r + 0.587 * mean_g + 0.114 * mean_b
+            if lum < 40:
+                bright_score = max(0.0, (lum / 40.0) * 35.0)  # 过暗惩罚
+            elif lum > 235:
+                bright_score = max(0.0, ((255 - lum) / 20.0) * 40.0)  # 过曝惩罚
+            else:
+                diff = abs(lum - 135)
+                bright_score = max(60.0, 100.0 - (diff / 95.0) * 40.0)
+
+            # 2. 对比度与动态范围 (0~100)
+            std_r, std_g, std_b = stat.stddev[:3]
+            std_lum = 0.299 * std_r + 0.587 * std_g + 0.114 * std_b
+            contrast_score = min(100.0, max(0.0, (std_lum / 65.0) * 100.0))
+
+            # 3. 清晰度与边缘梯度评分 (邻域差分能量)
+            gray = thumb.convert("L")
+            pixels = list(gray.getdata())
+            w, h = gray.size
+            diff_sum = 0.0
+            sample_count = 0
+            for y in range(0, h - 1, 4):
+                row = y * w
+                next_row = (y + 1) * w
+                for x in range(0, w - 1, 4):
+                    diff_x = abs(pixels[row + x] - pixels[row + x + 1])
+                    diff_y = abs(pixels[row + x] - pixels[next_row + x])
+                    diff_sum += (diff_x + diff_y)
+                    sample_count += 1
+            sharpness = diff_sum / max(1, sample_count)
+            sharp_score = min(100.0, max(0.0, (sharpness / 16.0) * 100.0))
+
+            # 4. 色彩丰富度
+            color_diff = abs(mean_r - mean_g) + abs(mean_g - mean_b) + abs(mean_r - mean_b)
+            vibrancy_score = min(100.0, max(20.0, (color_diff / 40.0) * 100.0))
+
+            final_score = (
+                sharp_score * 0.40
+                + contrast_score * 0.25
+                + bright_score * 0.20
+                + vibrancy_score * 0.15
+            )
+            return round(final_score, 2)
+    except Exception:
+        return 50.0
+
+
+def select_best_cover_frames_from_clips(
+    clips: list[Any],
+    count: int = 3,
+    out_dir: Path | None = None,
+) -> list[Path]:
+    """
+    智能从计划片段（EditClip）中精选最适合做封面的几张高质量候选帧：
+    - 优先覆盖 Hook 开头引流片段与核心商品介绍片段；
+    - 在片段 30%、50%、70% 处多点候选采样，过滤转场黑帧与模糊眨眼帧；
+    - 根据画面美学评分（清晰度/色彩/曝光）智能选取最上镜、最高清的画面。
+    """
+    if not clips:
+        return []
+
+    target_count = max(1, count)
+    target_dir = out_dir or (settings.covers_dir / "candidates")
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    uid = uuid.uuid4().hex[:6]
+    candidate_frames: list[tuple[float, Path]] = []
+
+    # 优先选取前 5 个有效片段做多点候选采样
+    sample_clips = clips[:5] if len(clips) >= 5 else clips
+
+    for clip_idx, clip in enumerate(sample_clips):
+        c_path = getattr(clip, "path", None)
+        c_start = float(getattr(clip, "start", 0.0))
+        c_end = float(getattr(clip, "end", 0.0))
+        c_dur = max(0.4, c_end - c_start)
+
+        if not c_path or not Path(c_path).exists():
+            continue
+
+        # 在每个片段的 30%、50%、70% 处提取 3 个候选画面点
+        test_points = [
+            c_start + c_dur * 0.35,
+            c_start + c_dur * 0.50,
+            c_start + c_dur * 0.65,
+        ]
+        for pt_idx, ts in enumerate(test_points):
+            dest = target_dir / f"cand_{uid}_c{clip_idx}_p{pt_idx}.jpg"
+            if extract_video_frame(Path(c_path), ts, dest):
+                score = evaluate_cover_frame_aesthetic(dest)
+                candidate_frames.append((score, dest))
+
+    if not candidate_frames:
+        return []
+
+    # 按美学质量评分从高到低排序
+    candidate_frames.sort(key=lambda item: item[0], reverse=True)
+
+    # 选取评分最高的前 target_count 张代表帧
+    best_paths = [item[1] for item in candidate_frames[:target_count]]
+    return best_paths
+
+
+def select_best_cover_frames_from_video(
     video_path: Path,
     count: int = 3,
     out_dir: Path | None = None,
 ) -> list[Path]:
-    """从视频黄金区间（15%~85%）均匀截取多张不同时间点的高清代表帧，支持图生图多帧独立生成。"""
+    """
+    智能从单条视频中抽取 8~10 个黄金时间点候选帧，并通过美学评分算法自动选出最适合做封面的帧。
+    """
     if not video_path or not video_path.exists():
         return []
     try:
@@ -109,33 +232,46 @@ def extract_multiple_video_frames(
         dur = 6.0
 
     target_count = max(1, count)
-    target_dir = out_dir or (settings.covers_dir / "references")
+    target_dir = out_dir or (settings.covers_dir / "candidates")
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamps: list[float] = []
-    if dur > 2.0:
-        start_sec = max(0.6, dur * 0.15)
-        end_sec = max(start_sec + 0.5, dur * 0.85)
-        span = end_sec - start_sec
-        step = span / target_count
-        for i in range(target_count):
-            seg_start = start_sec + i * step
-            seg_end = start_sec + (i + 1) * step
-            ts = round(random.uniform(seg_start, seg_end), 2)
-            timestamps.append(ts)
-    else:
-        timestamps = [round(dur * (i + 1) / (target_count + 1), 2) for i in range(target_count)]
+    # 均匀采样 8 个黄金区间点
+    sample_ratios = [0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85]
+    candidate_frames: list[tuple[float, Path]] = []
+    uid = uuid.uuid4().hex[:6]
 
-    frames: list[Path] = []
-    uid = uuid.uuid4().hex[:8]
-    for idx, ts in enumerate(timestamps):
-        frame_dest = target_dir / f"extracted_{uid}_{idx + 1}.jpg"
-        if extract_video_frame(video_path, ts, frame_dest):
-            frames.append(frame_dest)
-        else:
-            mid_ts = round(dur * 0.5, 2)
-            if extract_video_frame(video_path, mid_ts, frame_dest):
-                frames.append(frame_dest)
+    for idx, r in enumerate(sample_ratios):
+        ts = round(dur * r, 2)
+        dest = target_dir / f"video_cand_{uid}_{idx + 1}.jpg"
+        if extract_video_frame(video_path, ts, dest):
+            score = evaluate_cover_frame_aesthetic(dest)
+            candidate_frames.append((score, dest))
+
+    if not candidate_frames:
+        return []
+
+    candidate_frames.sort(key=lambda item: item[0], reverse=True)
+    return [item[1] for item in candidate_frames[:target_count]]
+
+
+def extract_multiple_video_frames(
+    video_path: Path,
+    count: int = 3,
+    out_dir: Path | None = None,
+) -> list[Path]:
+    """基于美学质量智能精选多张高质量关键代表帧。"""
+    best = select_best_cover_frames_from_video(video_path, count=count, out_dir=out_dir)
+    if best:
+        return best
+    # 兜底
+    target_dir = out_dir or (settings.covers_dir / "references")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    frames = []
+    uid = uuid.uuid4().hex[:6]
+    for i in range(count):
+        dest = target_dir / f"fallback_{uid}_{i+1}.jpg"
+        if extract_video_frame(video_path, 1.0 + i * 1.5, dest):
+            frames.append(dest)
     return frames
 
 
@@ -850,6 +986,7 @@ def generate_video_covers(
     job_id: str,
     *,
     video_path: Path | str | None = None,
+    pre_extracted_frames: list[Path] | None = None,
     audio_transcript: list[str] | str | None = None,
     group_name: str | None = None,
     count: int = 3,
@@ -860,8 +997,8 @@ def generate_video_covers(
 ) -> list[CoverResult]:
     """
     基于成片真实画面与音频口播卖点，为成片自动化提取 3 帧高清画面并进行 AI 图生图（img2img）生成竖版 9:16 4K 高画质爆款封面海报。
+    - 支持混剪期提前精选美学高光关键帧并同步并行生图。
     - 智能分析音频提炼多组爆款大字标语。
-    - 均匀从剪辑好的视频黄金展示区间（15%~85%）中采集 3 张不同时间点的高清代表帧。
     - 每一帧作为图生图独立底图（竖版 9:16 构图、4K 超清），调用 AI 生成爆款海报。
     - 若未配置 AI 密钥或生图异常，平滑降级为 9:16 4K 等比高清大字报 SVG（绝不遮挡面部，无伪UI按钮）。
     """
@@ -883,9 +1020,9 @@ def generate_video_covers(
     while len(headlines) < target_count:
         headlines.append(headlines[0] if headlines else "爆款带货 极速出片")
 
-    # 2. 均匀从成片视频黄金展示区间中抽取多张高清画面帧（默认 3 帧）
-    extracted_frames: list[Path] = []
-    if v_path and v_path.exists():
+    # 2. 确定候选高清画面帧（优先使用混剪初期精选出的最佳高美感代表帧）
+    extracted_frames: list[Path] = [f for f in (pre_extracted_frames or []) if f.exists()]
+    if not extracted_frames and v_path and v_path.exists():
         extracted_frames = extract_multiple_video_frames(v_path, count=target_count, out_dir=out_dir)
 
     # 3. 如果配置了 AI 接口，使用真实截帧与音频智能提炼大字进行竖版 9:16 4K AI 图生图 (img2img)

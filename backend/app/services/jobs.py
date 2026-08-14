@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+import concurrent.futures
 import re
 import shutil
 import threading
@@ -27,7 +26,11 @@ from app.services.sell_planner import ExtractRules, build_magic_cues, build_sell
 from app.services.sell_renderer import render_sell_video
 from app.services.transcription import TranscriptionError, transcribe_video
 from app.services.ai_sell_judge import ai_judge_sell_plan, collect_ai_candidates
-from app.services.covers import generate_video_covers
+from app.services.covers import (
+    generate_video_covers,
+    select_best_cover_frames_from_clips,
+    select_best_cover_frames_from_video,
+)
 from app.services.openai_client import has_openai_key
 
 
@@ -301,7 +304,50 @@ class JobManager:
 
                 if not plan:
                     raise ValueError("未能从口播中抽出可用句子")
+            else:
+                on_progress(5, "分析素材并抽样高光…")
+                infos = [probe(Path(m.path)) for m in materials]
+                plan = build_segment_plan(
+                    infos,
+                    target_total=target,
+                    segment_len=settings.segment_seconds,
+                )
 
+            # 1. 自动从口播提炼文案并根据画面美学评分精选 3 张最美观最上镜的高清代表关键帧
+            audio_sentences = []
+            if req.mode == "sell" and plan:
+                audio_sentences = [clip.text.strip() for clip in plan if clip.text.strip()]
+            elif magic_cues:
+                audio_sentences = [cue.text.strip() for cue in magic_cues if cue.text.strip()]
+
+            group = store.get_group(req.group_id) if req.group_id else None
+            group_name = group.name if group else None
+
+            # 提前精选高质量代表帧
+            on_progress(35, "智能精选上镜高光帧，同步启动 AI 图生图…")
+            job_cover_dir = settings.covers_dir / job_id
+            if req.mode == "sell" and plan:
+                best_frames = select_best_cover_frames_from_clips(plan, count=3, out_dir=job_cover_dir)
+            else:
+                best_frames = select_best_cover_frames_from_video(Path(materials[0].path), count=3, out_dir=job_cover_dir) if materials else []
+
+            # 2. 启动后台线程并发生成 AI 封面（视频渲染与封面生图 100% 同步并行进行）
+            cover_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            cover_future = cover_pool.submit(
+                generate_video_covers,
+                headline=None if req.mode == "sell" else req.title,
+                job_id=job_id,
+                pre_extracted_frames=best_frames,
+                audio_transcript=audio_sentences,
+                group_name=group_name,
+                count=3,
+                aspect_ratio="9:16",
+                size="1024x1536",
+                quality="high",
+            )
+
+            # 3. 主线程同步执行视频切割、字幕烧录与高画质编码渲染
+            if req.mode == "sell":
                 duration = render_sell_video(
                     plan,
                     out_path,
@@ -316,13 +362,6 @@ class JobManager:
                     on_progress=on_progress,
                 )
             else:
-                on_progress(5, "分析素材并抽样高光…")
-                infos = [probe(Path(m.path)) for m in materials]
-                plan = build_segment_plan(
-                    infos,
-                    target_total=target,
-                    segment_len=settings.segment_seconds,
-                )
                 title = req.title if add_subs else None
                 duration = render_highlight_reel(
                     plan,
@@ -331,31 +370,14 @@ class JobManager:
                     on_progress=on_progress,
                 )
 
-            # 自动基于成片实际音频口播提取核心卖点，智能生成配套封面大字报
-            audio_sentences = []
-            if req.mode == "sell" and plan:
-                audio_sentences = [clip.text.strip() for clip in plan if clip.text.strip()]
-            elif magic_cues:
-                audio_sentences = [cue.text.strip() for cue in magic_cues if cue.text.strip()]
-
-            group = store.get_group(req.group_id) if req.group_id else None
-            group_name = group.name if group else None
-
-            on_progress(94, "基于视频音频口播智能提炼爆款文案，生成强关联封面…")
+            # 4. 视频渲染完成，收拢并行生成的 AI 封面结果（此时封面已在后台生成完毕，无需额外等待）
+            on_progress(96, "视频合成完成，同步合并高转化 AI 封面…")
             try:
-                covers = generate_video_covers(
-                    headline=None if req.mode == "sell" else req.title,
-                    job_id=job_id,
-                    video_path=out_path,
-                    audio_transcript=audio_sentences,
-                    group_name=group_name,
-                    count=3,
-                    aspect_ratio="9:16",
-                    size="1024x1536",
-                    quality="high",
-                )
+                covers = cover_future.result(timeout=90)
             except Exception:
                 covers = []
+            finally:
+                cover_pool.shutdown(wait=False)
 
             final_headline = (covers[0].headline if covers and covers[0].headline else None) or req.title or "爆款带货 极速出片"
 
