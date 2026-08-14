@@ -179,6 +179,7 @@ def collect_ai_candidates(
         PRICE_RE as _PRICE,
         ExtractRules,
         _is_sparse_or_stalled,
+        is_negative_segment,
     )
 
     rules = rules or ExtractRules()
@@ -186,6 +187,8 @@ def collect_ai_candidates(
     for path, segs in clips:
         for seg in segs:
             if not seg.text.strip() or seg.end <= seg.start:
+                continue
+            if is_negative_segment(seg.text, rules):
                 continue
             if rules.silence and _is_sparse_or_stalled(seg):
                 continue

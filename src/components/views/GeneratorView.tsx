@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import {
   CirclePlay,
   Download,
@@ -8,9 +9,11 @@ import {
   Loader2,
   Music,
   Plus,
+  ShieldAlert,
   SlidersHorizontal,
   Upload,
   Volume2,
+  Wand2,
   WandSparkles,
   X,
   Sparkles,
@@ -53,12 +56,26 @@ const tones = [
   "bg-rose-400",
 ] as const
 
+const COMMON_NEGATIVE_PRESETS = [
+  "1号链接",
+  "小黄车",
+  "去拍",
+  "下方链接",
+  "关注主播",
+  "加入粉丝团",
+  "公屏扣1",
+  "主播身材",
+  "私信客服",
+  "拍一发三",
+] as const
+
 type GeneratorViewProps = {
   onGoLibrary?: () => void
   onGoHistory?: () => void
 }
 
 export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) {
+  const navigate = useNavigate()
   const { materials, selectedIds, groups, activeGroupId } = useMaterials()
   const { registerJobs } = useJobs()
   const selected = useMemo(
@@ -86,6 +103,26 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
   const [clipsPerVideo, setClipsPerVideo] = useState<number | null>(5)
   const [shuffleClips, setShuffleClips] = useState<boolean>(true)
   const [deepDedup, setDeepDedup] = useState<boolean>(true)
+
+  // 口播否词过滤
+  const [filterLivePitch, setFilterLivePitch] = useState<boolean>(true)
+  const [negativeWords, setNegativeWords] = useState<string[]>([
+    "1号链接", "下方小黄车", "小黄车去拍", "关注主播"
+  ])
+  const [customNegativeInput, setCustomNegativeInput] = useState<string>("")
+
+  const handleAddNegativeWord = (word: string) => {
+    const trimmed = word.trim()
+    if (!trimmed) return
+    if (!negativeWords.includes(trimmed)) {
+      setNegativeWords((prev) => [...prev, trimmed])
+    }
+    setCustomNegativeInput("")
+  }
+
+  const handleRemoveNegativeWord = (word: string) => {
+    setNegativeWords((prev) => prev.filter((w) => w !== word))
+  }
 
   const [rules, setRules] = useState<Record<string, boolean>>(
     Object.fromEntries(extractRules.map((r) => [r.id, r.checked]))
@@ -250,6 +287,8 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
           bgm_file: customBgm ? customBgm.filename : null,
           mode: "sell",
           extract_rules: rules,
+          negative_words: negativeWords,
+          filter_live_pitch: filterLivePitch,
           title: baseTitle,
           clips_per_video: clipsPerVideo,
           shuffle_clips: shuffleClips,
@@ -276,6 +315,8 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
               bgm_file: customBgm ? customBgm.filename : null,
               mode: "sell",
               extract_rules: rules,
+              negative_words: negativeWords,
+              filter_live_pitch: filterLivePitch,
               title: `${baseTitle} #${i + 1}`,
               variant_index: i,
               clips_per_video: clipsPerVideo,
@@ -603,6 +644,125 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
             {/* Divider */}
             <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
 
+            {/* Section: 口播否词过滤 (切片脱水 / 违规词过滤) */}
+            <div>
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-2.5 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <ShieldAlert className="size-3.5 text-rose-500" />
+                  口播否词过滤 (切片脱水)
+                </span>
+                <span className="text-[10px] font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60 px-2 py-0.5 rounded-full border border-rose-200/60">
+                  防违规 · 纯净带货
+                </span>
+              </h4>
+
+              <div className="flex flex-col gap-3 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 p-3.5">
+                {/* 自动过滤直播导流废话 Switch */}
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                      过滤直播导流口播 (推荐)
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      自动剔除「1号链接、小黄车、左下角去拍、关注主播」等口播
+                    </span>
+                  </div>
+                  <Switch
+                    checked={filterLivePitch}
+                    onCheckedChange={setFilterLivePitch}
+                    disabled={busy}
+                  />
+                </div>
+
+                {/* 自定义否词输入与标签管理 */}
+                <div className="pt-2.5 border-t border-slate-200/60 dark:border-slate-700/60 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                      自定义否词关键词 ({negativeWords.length})
+                    </span>
+                    <span className="text-[10px] text-slate-400">命中任一词的句子将自动舍弃</span>
+                  </div>
+
+                  {/* 快捷推荐预设胶囊 */}
+                  <div className="flex flex-wrap items-center gap-1">
+                    <span className="text-[10px] text-slate-400 mr-0.5">快捷添加:</span>
+                    {COMMON_NEGATIVE_PRESETS.map((preset) => {
+                      const isAdded = negativeWords.includes(preset)
+                      return (
+                        <button
+                          key={preset}
+                          type="button"
+                          disabled={busy || isAdded}
+                          onClick={() => handleAddNegativeWord(preset)}
+                          className={cn(
+                            "px-2 py-0.5 rounded-md text-[10px] font-medium transition-all cursor-pointer border",
+                            isAdded
+                              ? "opacity-40 bg-slate-100 dark:bg-slate-800 text-slate-400 border-transparent cursor-default"
+                              : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-rose-300 hover:text-rose-600"
+                          )}
+                        >
+                          + {preset}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* 当前已启用的否词 Tag 列表 */}
+                  {negativeWords.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 max-h-24 overflow-y-auto">
+                      {negativeWords.map((word) => (
+                        <span
+                          key={word}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200/70 dark:border-rose-900/60 text-xs font-medium"
+                        >
+                          <span>{word}</span>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleRemoveNegativeWord(word)}
+                            className="hover:text-rose-900 dark:hover:text-white cursor-pointer"
+                            title="删除此否词"
+                          >
+                            <X className="size-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* 输入框添加自定义否词 */}
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <input
+                      type="text"
+                      disabled={busy}
+                      value={customNegativeInput}
+                      onChange={(e) => setCustomNegativeInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          handleAddNegativeWord(customNegativeInput)
+                        }
+                      }}
+                      placeholder="输入自定义违禁词/废话，回车快速添加…"
+                      className="flex-1 h-8 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 text-xs text-slate-800 dark:text-slate-200 outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500/20"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={busy || !customNegativeInput.trim()}
+                      onClick={() => handleAddNegativeWord(customNegativeInput)}
+                      className="h-8 px-3 text-xs bg-slate-900 hover:bg-slate-800 text-white rounded-lg cursor-pointer"
+                    >
+                      添加否词
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
+
             {/* Section 3: 字幕 / 音乐 / 画幅 */}
             <div>
               <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-2.5">
@@ -878,8 +1038,28 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                   <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
                   成片完成
                 </div>
-                <div className="absolute right-4 bottom-4 z-10">
-                  <Button asChild size="sm" className="bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-lg rounded-xl">
+                <div className="absolute right-4 bottom-4 z-10 flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      const targetTitle = activeGroup ? `${activeGroup.name} · 成片` : `成片 ${job.id.slice(0, 8)}`
+                      navigate("/cover", {
+                        state: {
+                          refImageUrl: job.covers?.[0]?.url || (job.output_url ? `/api/jobs/${job.id}/thumb.jpg` : undefined),
+                          headline: job.headline || (activeGroup ? `${activeGroup.name} 爆款特惠！限时抢购` : "爆款特惠！限时抢购，错过再等一年！"),
+                          title: targetTitle,
+                          sourceJobId: job.id,
+                        },
+                      })
+                    }}
+                    className="bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow-lg rounded-xl flex items-center gap-1.5 cursor-pointer px-3 py-1.5"
+                    title="为此成片制作定制 AI 爆款大字报封面"
+                  >
+                    <Wand2 className="size-3.5" />
+                    <span>定制 AI 封面</span>
+                  </Button>
+                  <Button asChild size="sm" className="bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-lg rounded-xl text-xs px-3 py-1.5">
                     <a href={`/api/jobs/${job.id}/download`} download>
                       <Download className="mr-1.5 size-3.5" />
                       下载成片

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
-import { Download, Loader2, Timeline, Trash2, Image as ImageIcon } from "lucide-react"
+import { useNavigate } from "react-router-dom"
+import { Download, Loader2, Timeline, Trash2, Wand2, Image as ImageIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ImagePreviewModal } from "@/components/ui/image-preview-modal"
@@ -52,6 +53,7 @@ function statusBadge(job: Job) {
 }
 
 export function HistoryView() {
+  const navigate = useNavigate()
   const { groups } = useMaterials()
   const [jobs, setJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
@@ -220,6 +222,29 @@ export function HistoryView() {
                             视频
                           </a>
                         </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const jobTitle = job.group_id && groupById.get(job.group_id)
+                              ? `${groupById.get(job.group_id)} · 成片`
+                              : `成片 ${job.id.slice(0, 8)}`
+                            navigate("/cover", {
+                              state: {
+                                refImageUrl: job.covers?.[0]?.url || (job.output_url ? `/api/jobs/${job.id}/thumb.jpg` : undefined),
+                                headline: job.headline || (job.group_id && groupById.get(job.group_id) ? `${groupById.get(job.group_id)} 爆款特惠！限时抢购` : "爆款特惠！限时抢购，错过再等一年！"),
+                                title: jobTitle,
+                                sourceJobId: job.id,
+                              },
+                            })
+                          }}
+                          className="h-7 text-xs px-2.5 border-purple-200 text-purple-700 bg-purple-50/60 dark:bg-purple-950/40 dark:border-purple-900 dark:text-purple-300 hover:bg-purple-100 cursor-pointer gap-1"
+                          title="为此视频制作爆款 AI 大字报封面"
+                        >
+                          <Wand2 className="size-3 text-purple-600 dark:text-purple-400" />
+                          AI封面
+                        </Button>
                         {job.covers && job.covers.length > 0 ? (
                           <Button
                             type="button"
@@ -229,7 +254,7 @@ export function HistoryView() {
                             className="h-7 text-xs px-2.5 border-amber-200 text-amber-700 bg-amber-50/60 dark:bg-amber-950/40 dark:border-amber-900 dark:text-amber-400 cursor-pointer gap-1"
                           >
                             <ImageIcon className="size-3 text-amber-500" />
-                            封面 ({job.covers.length})
+                            已存 ({job.covers.length})
                           </Button>
                         ) : null}
                         <Button size="sm" className="h-7 text-xs px-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium" asChild>

@@ -72,6 +72,9 @@ class GenerateRequest(BaseModel):
     mode: Literal["sell", "highlight"] = "sell"
     # bargain / detail / silence — 混剪规则勾选
     extract_rules: dict[str, bool] | None = None
+    # 否词与违规口播过滤（如 1号链接、小黄车、去拍、关注主播等）
+    negative_words: list[str] = Field(default_factory=list)
+    filter_live_pitch: bool = True
     # 批量成片：同素材池生成差异化版本（0=默认，1/2…换句序与侧重）
     variant_index: int = Field(default=0, ge=0, le=100)
     # 每几段素材缝合生成 1 个长视频（如 5 段/条）
@@ -102,6 +105,8 @@ class BatchGenerateRequest(BaseModel):
     title: str | None = None
     mode: Literal["sell", "highlight"] = "sell"
     extract_rules: dict[str, bool] | None = None
+    negative_words: list[str] = Field(default_factory=list)
+    filter_live_pitch: bool = True
     clips_per_video: int | None = Field(default=None, ge=1, le=50)
     shuffle_clips: bool = True
     deep_dedup: bool = True
@@ -126,8 +131,14 @@ class CoverStyle(str, Enum):
 class CoverRequest(BaseModel):
     headline: str = Field(min_length=1, max_length=120)
     style: CoverStyle = CoverStyle.yellow_red
-    count: int = Field(default=3, ge=1, le=3)
-    mode: Literal["ai", "template"] = "ai"
+    count: int = Field(default=4, ge=1, le=4)
+    mode: Literal["text2img", "img2img", "ai"] = "text2img"
+    image_url: str | None = None
+    material_id: str | None = None
+    size: str = "1024x1536"
+    quality: str = "auto"
+    rewrite_prompt: bool = False
+
 
 
 class JobCoverRequest(BaseModel):

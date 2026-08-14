@@ -87,14 +87,28 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       // 1. Append to notification list
       setNotifications((prev) => [newItem, ...prev])
 
-      // 2. Add floating UI Toast
+      // 2. Add floating UI Toast with smart deduplication
       const toastId = `toast_${id}`
-      setToasts((prev) => [...prev, { id: toastId, title, message, type }])
+      setToasts((prev) => {
+        const existingIdx = prev.findIndex(
+          (t) => t.title === title && t.message === message && t.type === type
+        )
+        if (existingIdx !== -1) {
+          const updated = [...prev]
+          const existing = updated[existingIdx]
+          const count = (existing.count || 1) + 1
+          updated[existingIdx] = { ...existing, id: toastId, count }
+          return updated
+        }
+        // Keep at most 3 simultaneous toasts
+        const trimmed = prev.length >= 3 ? prev.slice(prev.length - 2) : prev
+        return [...trimmed, { id: toastId, title, message, type, count: 1 }]
+      })
 
-      // Auto dismiss toast after 4.5 seconds
+      // Auto dismiss toast after 3.8 seconds
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== toastId))
-      }, 4500)
+      }, 3800)
 
       // 3. Audio Chime
       if (playSound) {

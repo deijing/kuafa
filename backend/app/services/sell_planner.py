@@ -14,6 +14,16 @@ INTRO_RE = re.compile(
 )
 DETAIL_RE = re.compile(r"(面料|上身|版型|颜色|质感|细节|特写|展示|搭配|摸起来|手感)")
 
+DEFAULT_LIVE_PITCH_WORDS = (
+    "1号链接", "一号链接", "2号链接", "二号链接", "3号链接", "三号链接",
+    "4号链接", "四号链接", "5号链接", "五号链接", "几号链接", "看几号",
+    "小黄车", "下方小黄车", "左下角小黄车", "右下角小黄车", "去拍", "抓紧去拍", "赶紧去拍", "下方链接",
+    "关注主播", "给主播点点关注", "点关注不迷路", "点个关注", "点点关注",
+    "粉丝团", "加入粉丝团", "进粉丝团", "灯牌", "粉丝灯牌", "加个灯牌",
+    "公屏", "公屏扣", "扣1", "扣666", "连麦", "榜一", "榜二", "榜三大哥",
+    "主播身高", "主播体重", "穿几码", "客服", "私信客服",
+)
+
 
 @dataclass
 class EditClip:
@@ -38,16 +48,43 @@ class ExtractRules:
     bargain: bool = True  # 保留讲价/逼单
     detail: bool = True  # 保留产品细节特写
     silence: bool = False  # 去除无声/冗长卡顿
+    filter_live_pitch: bool = True  # 自动过滤直播导流口播（1号链接、小黄车、去拍等）
+    negative_words: tuple[str, ...] = ()  # 自定义否词列表
 
     @classmethod
-    def from_dict(cls, raw: dict[str, bool] | None) -> ExtractRules:
+    def from_dict(
+        cls,
+        raw: dict | None,
+        negative_words: list[str] | None = None,
+        filter_live_pitch: bool | None = None,
+    ) -> ExtractRules:
         if not raw:
-            return cls()
+            raw = {}
+        negs = list(negative_words if negative_words is not None else raw.get("negative_words", []))
+        flp = filter_live_pitch if filter_live_pitch is not None else raw.get("filter_live_pitch", True)
         return cls(
             bargain=bool(raw.get("bargain", True)),
             detail=bool(raw.get("detail", True)),
             silence=bool(raw.get("silence", False)),
+            filter_live_pitch=bool(flp),
+            negative_words=tuple(str(w).strip() for w in negs if str(w).strip()),
         )
+
+
+def is_negative_segment(text: str, rules: ExtractRules) -> bool:
+    """检查当前口播切片是否命中了自定义否词或直播导流黑名单。"""
+    if not text:
+        return False
+    # 1. 用户自定义否词检查
+    for kw in rules.negative_words:
+        if kw and kw in text:
+            return True
+    # 2. 直播间导流与废话口播过滤
+    if rules.filter_live_pitch:
+        for pitch in DEFAULT_LIVE_PITCH_WORDS:
+            if pitch in text:
+                return True
+    return False
 
 
 def _score(seg: TranscriptSegment, role: str) -> float:
@@ -110,6 +147,8 @@ def build_sell_plan(
     for path, segs in clips:
         for seg in segs:
             if not seg.text.strip() or seg.end <= seg.start:
+                continue
+            if is_negative_segment(seg.text, rules):
                 continue
             if rules.silence and _is_sparse_or_stalled(seg):
                 continue
@@ -240,13 +279,14 @@ def build_sell_plan(
     if not selected:
         for path, segs in clips:
             for s in segs:
+                if not s.text.strip() or is_negative_segment(s.text, rules):
+                    continue
                 if rules.silence and _is_sparse_or_stalled(s):
                     continue
-                if s.text.strip():
-                    selected.append(
-                        EditClip(path, s.start, s.end, s.text.strip(), "intro")
-                    )
-                    break
+                selected.append(
+                    EditClip(path, s.start, s.end, s.text.strip(), "intro")
+                )
+                break
 
     intros_sel = [c for c in selected if c.role == "intro"]
     prices_sel = [c for c in selected if c.role == "price"]

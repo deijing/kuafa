@@ -15,6 +15,7 @@ export type ToastItem = {
   title: string
   message: string
   type: "success" | "error" | "info"
+  count?: number
 }
 
 type NotificationContextValue = {

@@ -72,6 +72,8 @@ export type GeneratePayload = {
   title?: string
   mode?: "sell" | "highlight"
   extract_rules?: Record<string, boolean>
+  negative_words?: string[]
+  filter_live_pitch?: boolean
   variant_index?: number
   clips_per_video?: number | null
   shuffle_clips?: boolean
@@ -96,6 +98,8 @@ export type BatchGeneratePayload = {
   title?: string | null
   mode?: "sell" | "highlight"
   extract_rules?: Record<string, boolean>
+  negative_words?: string[]
+  filter_live_pitch?: boolean
   clips_per_video?: number | null
   shuffle_clips?: boolean
   deep_dedup?: boolean
@@ -133,11 +137,20 @@ export type CoverJob = {
   error: string | null
 }
 
+export type CoverMode = "text2img" | "img2img"
+export type CoverSize = "1024x1536" | "1024x1024" | "1536x1024"
+export type CoverQuality = "auto" | "high" | "medium" | "low"
+
 export type CoverPayload = {
   headline: string
   style: CoverStyle
   count?: number
-  mode?: "ai" | "template"
+  mode?: CoverMode
+  image_url?: string | null
+  material_id?: string | null
+  size?: CoverSize
+  quality?: CoverQuality
+  rewrite_prompt?: boolean
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -273,6 +286,15 @@ export async function uploadMaterial(file: File, groupId: string) {
   })
 }
 
+export async function uploadCoverReference(file: File) {
+  const form = new FormData()
+  form.append("file", file)
+  return request<{ filename: string; url: string }>("/api/covers/upload-reference", {
+    method: "POST",
+    body: form,
+  })
+}
+
 export function createCoverJob(payload: CoverPayload) {
   return request<CoverJob>("/api/covers/generate", {
     method: "POST",
@@ -288,6 +310,25 @@ export function fetchCoverJob(jobId: string) {
 export function fetchCoverJobs() {
   return request<CoverJob[]>("/api/covers/jobs")
 }
+
+export function deleteCoverJob(jobId: string) {
+  return request<CoverJob>(`/api/covers/jobs/${jobId}`, { method: "DELETE" })
+}
+
+export function deleteCoverResult(jobId: string, resultId: string) {
+  return request<{ status: string; job: CoverJob | null }>(
+    `/api/covers/jobs/${jobId}/results/${resultId}`,
+    { method: "DELETE" }
+  )
+}
+
+export function clearCoverJobs() {
+  return request<{ status: string; deleted_count: number }>(
+    "/api/covers/clear",
+    { method: "DELETE" }
+  )
+}
+
 
 export type ApiSecrets = {
   catsapi_key_set: boolean

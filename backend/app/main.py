@@ -498,6 +498,29 @@ def export_jobs_zip(req: JobExportZipRequest, background_tasks: BackgroundTasks)
     )
 
 
+@app.post("/api/covers/upload-reference")
+async def upload_cover_reference(file: UploadFile = File(...)) -> dict[str, str]:
+    """上传封面图生图参考底图（支持 jpg/png/webp）。"""
+    import uuid
+    if not file.filename:
+        raise HTTPException(400, "缺少文件名")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "空文件")
+    ref_dir = settings.covers_dir / "references"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    ext = Path(file.filename).suffix.lower() or ".jpg"
+    if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+        raise HTTPException(400, "仅支持 jpg, png, webp 格式图片")
+    safe_name = f"ref_{uuid.uuid4().hex[:8]}{ext}"
+    dest = ref_dir / safe_name
+    dest.write_bytes(data)
+    return {
+        "filename": safe_name,
+        "url": f"/api/media/covers/references/{safe_name}",
+    }
+
+
 @app.post("/api/covers/generate", response_model=CoverJobOut)
 def create_cover_job(req: CoverRequest) -> CoverJobOut:
     try:
@@ -517,6 +540,37 @@ def get_cover_job(job_id: str) -> CoverJobOut:
 @app.get("/api/covers/jobs", response_model=list[CoverJobOut])
 def list_cover_jobs() -> list[CoverJobOut]:
     return cover_jobs.list_jobs()
+
+
+@app.delete("/api/covers/jobs/{job_id}", response_model=CoverJobOut)
+def delete_cover_job(job_id: str) -> CoverJobOut:
+    """删除指定封面任务及对应封面图片文件。"""
+    try:
+        return cover_jobs.delete(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.delete("/api/covers/jobs/{job_id}/results/{result_id}")
+def delete_cover_result(job_id: str, result_id: str) -> dict[str, Any]:
+    """删除某条任务中的单张封面图片。"""
+    try:
+        updated = cover_jobs.delete_result(job_id, result_id)
+        return {"status": "ok", "job": updated}
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.delete("/api/covers/clear")
+def clear_cover_jobs() -> dict[str, Any]:
+    """清空所有历史出图记录。"""
+    count = cover_jobs.clear_all()
+    return {"status": "ok", "deleted_count": count}
+
 
 
 @app.get("/api/settings/secrets", response_model=ApiSecretsOut)

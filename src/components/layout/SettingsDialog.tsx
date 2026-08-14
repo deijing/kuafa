@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   CircleAlert,
   ExternalLink,
+  History,
   ImageIcon,
   RefreshCw,
   Settings,
@@ -10,6 +11,9 @@ import {
   Trash2,
   Zap,
 } from "lucide-react"
+
+import { ChangelogDialog } from "@/components/layout/ChangelogDialog"
+import { APP_VERSION } from "@/data/changelog"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -673,20 +677,34 @@ export function SettingsDialog() {
           )}
         </div>
 
-        <DialogFooter className="gap-3 px-7 pt-4 pb-6.5 border-t border-slate-100 dark:border-slate-800/60 bg-white dark:bg-slate-950 sm:justify-end">
-          <DialogClose asChild>
-            <Button variant="ghost" className="h-9 px-4 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-100 rounded-xl transition-colors">
-              关闭
+        <DialogFooter className="gap-3 px-7 pt-4 pb-6.5 border-t border-slate-100 dark:border-slate-800/60 bg-white dark:bg-slate-950 sm:justify-between items-center">
+          <ChangelogDialog
+            trigger={
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-400 font-mono transition-colors cursor-pointer"
+                title="查看版本更新记录与迭代日志"
+              >
+                <History className="size-3.5" />
+                <span>快发 {APP_VERSION} · 更新日志</span>
+              </button>
+            }
+          />
+          <div className="flex items-center gap-3">
+            <DialogClose asChild>
+              <Button variant="ghost" className="h-9 px-4 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-100 rounded-xl transition-colors">
+                关闭
+              </Button>
+            </DialogClose>
+            <Button
+              disabled={loading || saving}
+              onClick={() => void onSave()}
+              className="h-9 px-5 text-xs font-medium bg-[#0F172A] hover:bg-[#1E293B] active:bg-[#020617] text-white shadow-xs rounded-xl transition-all dark:bg-slate-100 dark:hover:bg-slate-200 dark:text-slate-900"
+            >
+              {saving ? <Spinner data-icon="inline-start" /> : null}
+              保存
             </Button>
-          </DialogClose>
-          <Button
-            disabled={loading || saving}
-            onClick={() => void onSave()}
-            className="h-9 px-5 text-xs font-medium bg-[#0F172A] hover:bg-[#1E293B] active:bg-[#020617] text-white shadow-xs rounded-xl transition-all dark:bg-slate-100 dark:hover:bg-slate-200 dark:text-slate-900"
-          >
-            {saving ? <Spinner data-icon="inline-start" /> : null}
-            保存
-          </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

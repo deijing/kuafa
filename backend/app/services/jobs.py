@@ -203,6 +203,8 @@ class JobManager:
                     title=title,
                     mode=req.mode,
                     extract_rules=req.extract_rules,
+                    negative_words=req.negative_words,
+                    filter_live_pitch=req.filter_live_pitch,
                     variant_index=i,
                     clips_per_video=req.clips_per_video,
                     shuffle_clips=req.shuffle_clips,
@@ -259,8 +261,12 @@ class JobManager:
                         "也可在设置中配置 OpenAI 兼容密钥作为 Whisper 回退"
                     )
 
-                on_progress(32, "按带货结构选句（介绍→价格，开头防重处理）…")
-                rules = ExtractRules.from_dict(req.extract_rules)
+                on_progress(32, "按带货结构选句（过滤导流否词，介绍→价格）…")
+                rules = ExtractRules.from_dict(
+                    req.extract_rules,
+                    negative_words=req.negative_words,
+                    filter_live_pitch=req.filter_live_pitch,
+                )
                 plan = build_sell_plan(
                     transcribed,
                     target_seconds=raw_target,

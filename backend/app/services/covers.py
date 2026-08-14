@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import html
+import shutil
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -60,6 +61,55 @@ class CoverJobManager:
         with self._lock:
             return store.get_cover_job(job_id)
 
+    def delete(self, job_id: str) -> CoverJobOut:
+        with self._lock:
+            job = store.get_cover_job(job_id)
+            if not job:
+                raise KeyError(f"封面任务 {job_id} 不存在")
+            store.delete_cover_job(job_id)
+            out_dir = settings.covers_dir / job_id
+            if out_dir.exists():
+                shutil.rmtree(out_dir, ignore_errors=True)
+            return job
+
+    def delete_result(self, job_id: str, result_id: str) -> CoverJobOut | None:
+        with self._lock:
+            job = store.get_cover_job(job_id)
+            if not job:
+                raise KeyError(f"封面任务 {job_id} 不存在")
+
+            # 删除对应单张图片文件
+            target = next((r for r in job.results if r.id == result_id), None)
+            if target:
+                filename = target.url.split("/")[-1]
+                file_path = settings.covers_dir / job_id / filename
+                if file_path.exists():
+                    try:
+                        file_path.unlink()
+                    except Exception:
+                        pass
+
+            new_results = [r for r in job.results if r.id != result_id]
+            if not new_results:
+                store.delete_cover_job(job_id)
+                out_dir = settings.covers_dir / job_id
+                if out_dir.exists():
+                    shutil.rmtree(out_dir, ignore_errors=True)
+                return None
+            else:
+                updated = job.model_copy(update={"results": new_results})
+                store.upsert_cover_job(updated)
+                return updated
+
+    def clear_all(self) -> int:
+        with self._lock:
+            jobs = store.list_cover_jobs()
+            for job in jobs:
+                out_dir = settings.covers_dir / job.id
+                if out_dir.exists():
+                    shutil.rmtree(out_dir, ignore_errors=True)
+            return store.delete_all_cover_jobs()
+
     def _update(self, job_id: str, **kwargs) -> None:
         with self._lock:
             job = store.get_cover_job(job_id)
@@ -99,36 +149,80 @@ class CoverJobManager:
     def _build_prompt(self, req: CoverRequest, index: int) -> str:
         style = STYLE_HINTS.get(req.style, STYLE_HINTS["yellow-red"])
         angle = VARIANT_ANGLES[index % len(VARIANT_ANGLES)]
+        if req.mode == "img2img":
+            return (
+                "基于提供的参考底图进行 AI 图生图重绘美化与高转化电商封面海报合成。"
+                "严格保留参考底图中的商品/人物主体特征，剔除杂乱背景与低质噪点，大幅提升专业商业摄影光影质感与通透柔光。"
+                f"在画面黄金分割位醒目融合大字报主题文案：「{req.headline.strip()}」。"
+                f"文字排版与视觉风格：{style}。"
+                f"构图版式：{angle}。"
+                "画面要求：超高清商业摄影质感、主体立体突出、色彩饱和吸睛、无多余水印杂物、无乱码，竖版构图。"
+            )
         return (
-            "基于原图拍摄素材美化增质，生成一张高颜值、高吸引力的小红书/抖音短视频竖版精美封面海报。"
-            f"必须醒目展示大字报主题文案：「{req.headline.strip()}」。"
-            f"文字样式与视觉要求：{style}。"
-            f"构图样式：{angle}。"
-            "画面要求：纯净高质感摄影、光影通透、无杂乱直播间视觉、无低质噪声、强视觉吸引力，不要水印，不要英文乱码，竖构图 3:4。"
+            "高颜值、高吸引力的小红书/抖音短视频竖版爆款大字报精美封面海报。"
+            f"在画面黄金分割位醒目展示大字报主题文案：「{req.headline.strip()}」。"
+            f"文字排版与视觉风格：{style}。"
+            f"构图版式：{angle}。"
+            "画面要求：超高清商业摄影质感、光影通透、主体突出、色彩饱和吸睛、无多余水印杂物、无乱码，竖版构图。"
         )
+
+    def _resolve_image_base64(self, image_url: str | None) -> str | None:
+        if not image_url:
+            return None
+        try:
+            target_path: Path | None = None
+            if image_url.startswith("/api/media/covers/references/"):
+                fname = image_url.split("/")[-1]
+                target_path = settings.covers_dir / "references" / fname
+            elif image_url.startswith("/api/thumbs/"):
+                fname = image_url.split("/")[-1]
+                target_path = settings.thumbs_dir / fname
+            elif image_url.startswith("/api/media/covers/"):
+                parts = image_url.replace("/api/media/covers/", "").split("/")
+                target_path = settings.covers_dir / Path(*parts)
+            elif Path(image_url).exists():
+                target_path = Path(image_url)
+
+            if target_path and target_path.exists():
+                raw = target_path.read_bytes()
+                mime = "image/png" if target_path.suffix.lower() == ".png" else "image/jpeg"
+                return f"data:{mime};base64,{base64.b64encode(raw).decode('utf-8')}"
+        except Exception:
+            pass
+        return None
 
     def _run(self, job_id: str, req: CoverRequest) -> None:
         try:
+            mode_desc = "AI 图生图" if req.mode == "img2img" else "AI 文生图"
             self._update(
                 job_id,
                 status=JobStatus.running,
                 progress=5,
-                message="正在调用 GPT Image 2…",
+                message=f"正在调用 GPT Image 2 进行 {mode_desc}…",
             )
             results: list[CoverResult] = []
             total = max(1, min(req.count, 6))
             out_dir = settings.covers_dir / job_id
             out_dir.mkdir(parents=True, exist_ok=True)
 
+            img_b64 = self._resolve_image_base64(req.image_url) if req.mode == "img2img" else None
+
             for i in range(total):
                 pct = 10 + int(80 * i / total)
                 self._update(
                     job_id,
                     progress=pct,
-                    message=f"生成封面 {i + 1}/{total}…",
+                    message=f"{mode_desc}生成中 {i + 1}/{total}…",
                 )
                 prompt = self._build_prompt(req, i)
-                task_id = catsapi.create_image_task(prompt)
+                task_id = catsapi.create_image_task(
+                    prompt,
+                    image_url=req.image_url if req.mode == "img2img" else None,
+                    image_base64=img_b64,
+                    size=req.size,
+                    quality=req.quality,
+                    rewrite_prompt=req.rewrite_prompt,
+                )
                 urls = catsapi.wait_for_images(task_id)
                 url = urls[0]
                 ext = catsapi.guess_ext(url)
@@ -160,6 +254,7 @@ class CoverJobManager:
                 error=str(exc),
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
+
 
 
 cover_jobs = CoverJobManager()

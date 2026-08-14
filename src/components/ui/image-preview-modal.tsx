@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Maximize2,
   Check,
+  Trash2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
@@ -23,6 +24,7 @@ type ImagePreviewModalProps = {
   onClose: () => void
   images: (string | ImageItem)[]
   initialIndex?: number
+  onDelete?: (index: number) => void
 }
 
 export function ImagePreviewModal({
@@ -30,6 +32,7 @@ export function ImagePreviewModal({
   onClose,
   images,
   initialIndex = 0,
+  onDelete,
 }: ImagePreviewModalProps) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex)
   const [scale, setScale] = useState(1)
@@ -165,6 +168,20 @@ export function ImagePreviewModal({
             <Download className="size-4" />
             下载原图
           </Button>
+
+          {onDelete ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onDelete(currentIndex)}
+              className="text-rose-400 hover:text-rose-300 hover:bg-rose-500/20 rounded-xl text-xs gap-1.5 h-9"
+              title="删除此图片"
+            >
+              <Trash2 className="size-4" />
+              删除
+            </Button>
+          ) : null}
 
           <div className="w-px h-5 bg-white/20 mx-1" />
 

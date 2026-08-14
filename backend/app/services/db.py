@@ -149,3 +149,18 @@ def list_cover_jobs() -> list[CoverJobOut]:
             "SELECT payload FROM cover_jobs ORDER BY created_at DESC"
         ).fetchall()
     return [CoverJobOut.model_validate_json(r["payload"]) for r in rows]
+
+
+def delete_cover_job(job_id: str) -> bool:
+    ensure_db()
+    with _db() as conn:
+        cur = conn.execute("DELETE FROM cover_jobs WHERE id = ?", (job_id,))
+        return cur.rowcount > 0
+
+
+def delete_all_cover_jobs() -> int:
+    ensure_db()
+    with _db() as conn:
+        cur = conn.execute("DELETE FROM cover_jobs")
+        return cur.rowcount
+

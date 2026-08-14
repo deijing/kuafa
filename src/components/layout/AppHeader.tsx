@@ -76,16 +76,16 @@ export function AppHeader({ title, onNewProject }: AppHeaderProps) {
             variant="ghost"
             size="icon"
             onClick={handleToggleOpen}
-            className="relative text-[#4B5563] hover:text-[#111827] dark:text-slate-400 dark:hover:text-slate-200"
+            className="rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-800 transition-colors"
             title="消息提醒"
           >
-            <Bell className="size-4" />
-            {unreadCount > 0 && (
-              <span className="absolute top-1.5 right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white shadow-xs">
-                {unreadCount > 99 ? "99+" : unreadCount}
-              </span>
-            )}
+            <Bell className="size-4.5" />
           </Button>
+          {unreadCount > 0 && (
+            <span className="pointer-events-none absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 font-mono text-[9px] font-bold text-white ring-2 ring-[#F7F8FA] dark:ring-slate-900 shadow-sm animate-in zoom-in-50 duration-150">
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </span>
+          )}
 
           {openNotifications && (
             <div className="absolute right-0 mt-2 w-80 md:w-96 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl p-4 z-50 text-slate-800 dark:text-slate-100 animate-in fade-in zoom-in-95 duration-150">

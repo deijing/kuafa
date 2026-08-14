@@ -1,0 +1,136 @@
+export type VersionTag = "🚀 重点迭代" | "🎨 视觉重构" | "⚡ 算法优化" | "🎉 初始发布"
+
+export type ChangelogCategory = "feature" | "perf" | "style" | "fix"
+
+export type ChangelogItem = {
+  version: string
+  date: string
+  title: string
+  tag: VersionTag
+  isLatest?: boolean
+  highlights: string[]
+  details: {
+    type: ChangelogCategory
+    text: string
+  }[]
+}
+
+export const APP_VERSION = "v1.3.0"
+export const APP_BUILD_DATE = "2026-08-14"
+
+export const CHANGELOG_DATA: ChangelogItem[] = [
+  {
+    version: "v1.3.0",
+    date: "2026-08-14",
+    title: "口播否词与导流过滤 · 混剪与封面全链路联动 · 批量原图打包",
+    tag: "🚀 重点迭代",
+    isLatest: true,
+    highlights: [
+      "智能截断与口播否词过滤系统（切片脱水），彻底剔除直播间导流废话",
+      "混剪成片一键跳转 AI 封面定制，画面帧与文案自动同步",
+      "封面工作台一键批量下载全部高清原图（PNG无损）",
+      "版本更新记录与迭代日志功能上线",
+    ],
+    details: [
+      {
+        type: "feature",
+        text: "新增「口播否词过滤 (切片脱水)」：自动识别并剔除「1号链接、下方小黄车、左下角去拍、关注主播、加入粉丝团」等直播间废话，成片更纯净转化更高。",
+      },
+      {
+        type: "feature",
+        text: "新增自定义否词与快捷预设：支持自定义任意关键词标签，支持一键点击快捷推荐胶囊，单片混剪与批量矩阵全面支持。",
+      },
+      {
+        type: "feature",
+        text: "新增混剪与封面双向联动：混剪成片播放器与成片历史新增「定制 AI 封面」入口，自动带入视频缩略图与产品文案；出图后一键绑定成片。",
+      },
+      {
+        type: "feature",
+        text: "新增封面批量原图打包下载：封面工作台支持一键批量下载当前批次所有生成的高清大图，并支持单张快捷秒存。",
+      },
+      {
+        type: "fix",
+        text: "修复顶部通知铃铛未读红点遮挡小喇叭/铃铛图标的定位重构问题。",
+      },
+    ],
+  },
+  {
+    version: "v1.2.0",
+    date: "2026-08-13",
+    title: "CatsAPI gptImage2 深度集成 · 爆款大字报封面工作台",
+    tag: "🎨 视觉重构",
+    highlights: [
+      "全新升级 Studio 级双栏封面创作工作台",
+      "完整支持 CatsAPI gptImage2 参数（画幅/画质/重写提示词）",
+      "3 组爆款大字报字体与排版预设库",
+    ],
+    details: [
+      {
+        type: "feature",
+        text: "封面生成工作台全面重构：升级为宽屏双栏 Studio 布局，文生图与图生图模式自如切换。",
+      },
+      {
+        type: "feature",
+        text: "深度集成 CatsAPI gptImage2 参数：支持 2:3 竖版、1:1 方图、3:2 横版画幅，生成数量 1~4 张，画质（auto/high/medium/low）与 GPT 智能润色开关。",
+      },
+      {
+        type: "style",
+        text: "爆款字体视觉库：内置黑底黄字、白底红字、紫金撞色、故障霓虹等高点击率样式。",
+      },
+    ],
+  },
+  {
+    version: "v1.1.0",
+    date: "2026-08-13",
+    title: "智能素材分段缝合 · 深度音视频降重引擎",
+    tag: "⚡ 算法优化",
+    highlights: [
+      "每 N 段素材自动切割缝合独立长视频",
+      "深度音视频降重算法（微剪/语速微扰/Hook重组）",
+      "自定义 BGM 上传与无极音量滑块调节",
+    ],
+    details: [
+      {
+        type: "feature",
+        text: "素材分段缝合：支持设置「每 N 段素材合成 1 条长视频」，大批量素材一键自动分块切片。",
+      },
+      {
+        type: "perf",
+        text: "深度去重防重算法：采用打乱素材拼接次序、语速微调与 Hook 开头多样化重构，打破原片指纹。",
+      },
+      {
+        type: "feature",
+        text: "音频系统增强：支持上传自定义 BGM 文件，提供 0~100% 精确无极音量滑块调节。",
+      },
+      {
+        type: "style",
+        text: "靠上安全区字幕排版：字幕高度默认提升至靠上安全区，避免被短视频平台底部交互栏遮挡。",
+      },
+    ],
+  },
+  {
+    version: "v1.0.0",
+    date: "2026-08-12",
+    title: "快发短视频混剪系统诞生",
+    tag: "🎉 初始发布",
+    highlights: [
+      "本地化素材文件夹与切片智能管理",
+      "必剪 ASR 语音转写与带货结构自动选句",
+      "FFmpeg 高性能本地渲染管线",
+    ],
+    details: [
+      {
+        type: "feature",
+        text: "素材库管理：支持文件夹分组、批量导入、视频切片快速预览与管理。",
+      },
+      {
+        type: "feature",
+        text: "带货结构混剪：基于 ASR 转写整句切分，自动按「产品卖点介绍 → 价格与逼单」黄金结构拼接。",
+      },
+      {
+        type: "feature",
+        text: "成片历史与批量导出：任务进度实时轮询，成片即时播放与一键下载保存。",
+      },
+    ],
+  },
+]

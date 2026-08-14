@@ -31,22 +31,43 @@ def _base() -> str:
 def create_image_task(
     prompt: str,
     *,
+    image_url: str | None = None,
+    input_images: list[str] | None = None,
+    image_base64: str | None = None,
     size: str | None = None,
     quality: str | None = None,
     num_images: int = 1,
     rewrite_prompt: bool = False,
 ) -> str:
-    payload = {
+    params: dict[str, Any] = {
+        "rewritePrompt": rewrite_prompt,
+        "quality": quality or settings.cover_quality,
+        "size": size or settings.cover_size,
+    }
+    if image_base64:
+        params["imagePrompt"] = image_base64
+    elif image_url:
+        params["imagePrompt"] = image_url
+
+    payload: dict[str, Any] = {
         "model": settings.catsapi_model,
         "prompt": prompt,
         "task_type": "image",
         "num_images": num_images,
-        "params": {
-            "rewritePrompt": rewrite_prompt,
-            "quality": quality or settings.cover_quality,
-            "size": size or settings.cover_size,
-        },
+        "params": params,
     }
+
+    # Reference images support
+    if image_base64:
+        payload["files"] = {
+            "referenceImages": [{"base64": image_base64, "name": "reference.png"}]
+        }
+        payload["input_images"] = [image_base64]
+    elif input_images:
+        payload["input_images"] = input_images
+    elif image_url:
+        payload["input_images"] = [image_url]
+
     resp = requests.post(
         f"{_base()}/tasks",
         headers=_headers(),
@@ -56,7 +77,7 @@ def create_image_task(
     if resp.status_code >= 400:
         raise CatsApiError(f"创建任务失败 ({resp.status_code}): {resp.text[:300]}")
     data = resp.json()
-    task_id = data.get("id")
+    task_id = data.get("id") or data.get("task_id") or (data.get("data", {}).get("id") if isinstance(data.get("data"), dict) else None)
     if not task_id:
         raise CatsApiError(f"创建任务无 id: {data}")
     return str(task_id)
@@ -82,14 +103,24 @@ def wait_for_images(
     started = time.time()
     while True:
         info = get_task(task_id)
-        status = info.get("status")
-        if status == "completed":
-            images = info.get("result_images") or []
+        status = str(info.get("status") or "").lower()
+        if status in ("completed", "succeeded", "success", "done"):
+            images = (
+                info.get("result_images")
+                or info.get("output")
+                or info.get("result")
+                or info.get("images")
+                or (info.get("data", {}).get("images") if isinstance(info.get("data"), dict) else None)
+                or (info.get("data", {}).get("result_images") if isinstance(info.get("data"), dict) else None)
+                or []
+            )
+            if isinstance(images, str):
+                images = [images]
             if not images:
                 raise CatsApiError("任务完成但没有返回图片")
             return [str(u) for u in images]
-        if status == "failed":
-            raise CatsApiError(info.get("error_message") or "生成失败")
+        if status in ("failed", "error"):
+            raise CatsApiError(info.get("error_message") or info.get("error") or "生成失败")
         if time.time() - started > timeout_seconds:
             raise CatsApiError("生成超时，请稍后重试")
         time.sleep(poll_seconds)
