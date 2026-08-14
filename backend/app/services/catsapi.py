@@ -44,9 +44,7 @@ def create_image_task(
         "quality": quality or settings.cover_quality,
         "size": size or settings.cover_size,
     }
-    if image_base64:
-        params["imagePrompt"] = image_base64
-    elif image_url:
+    if image_url and image_url.startswith("http"):
         params["imagePrompt"] = image_url
 
     payload: dict[str, Any] = {
@@ -59,14 +57,13 @@ def create_image_task(
 
     # Reference images support
     if image_base64:
-        clean_b64 = image_base64.split(",", 1)[-1] if "," in image_base64 else image_base64
-        payload["files"] = {
-            "referenceImages": [{"base64": clean_b64, "name": "reference.jpg"}]
-        }
+        payload["input_mode"] = "image_to_image"
         payload["input_images"] = [image_base64]
     elif input_images:
+        payload["input_mode"] = "image_to_image"
         payload["input_images"] = input_images
-    elif image_url:
+    elif image_url and image_url.startswith("http"):
+        payload["input_mode"] = "image_to_image"
         payload["input_images"] = [image_url]
 
     resp = requests.post(

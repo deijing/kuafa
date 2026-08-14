@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import html
 import json
 import random
@@ -182,22 +183,15 @@ class CoverJobManager:
     def _build_prompt(self, req: CoverRequest, index: int) -> str:
         style = STYLE_HINTS.get(req.style, STYLE_HINTS["yellow-red"])
         angle = VARIANT_ANGLES[index % len(VARIANT_ANGLES)]
+        text = req.headline.strip()
         if req.mode == "img2img":
             return (
-                "基于提供的参考底图（视频真实画面截帧或实拍图）进行专业 AI 电商爆款封面海报图生图合成与重绘："
-                "1. 【严格保真核心主体】：严格保留参考底图中的主播人像、模特样貌、主播手里拿持/展示的商品/服饰的核心款式、版型和材质细节特征完全一致，严禁替换为无关商品。"
-                "2. 【画面重构与美化】：将参考底图作为海报画面核心主体，剔除杂乱背景与低质噪点，大幅提升专业商业摄影级通透柔光与高级质感，背景融合明亮干净的爆款带货海报视觉元素。"
-                f"3. 【大字报主题排版】：在画面黄金分割区域醒目排版融合大字报主题文案：「{req.headline.strip()}」，字形立体饱满、色彩鲜明吸睛，形成强转化视觉冲击力。"
-                f"4. 【视觉风格】：{style}。"
-                f"5. 【构图版式】：{angle}。"
-                "6. 【出图标准】：超高清商业摄影广告质感、主体立体突出、色彩饱和吸睛、无多余水印杂物、无乱码，3:4 竖版构图。"
+                f"小红书抖音电商爆款大字报封面海报，严格保真参考图中主播人物形象与手里拿持展示的商品款式细节，"
+                f"在画面黄金分割区域醒目排版大字报标题：「{text}」，{style}，构图：{angle}，超高清商业广告摄影质感，3:4竖版。"
             )
         return (
-            "高颜值、高吸引力的小红书/抖音短视频竖版爆款大字报精美封面海报。"
-            f"在画面黄金分割位醒目展示大字报主题文案：「{req.headline.strip()}」。"
-            f"文字排版与视觉风格：{style}。"
-            f"构图版式：{angle}。"
-            "画面要求：超高清商业摄影质感、光影通透、主体突出、色彩饱和吸睛、无多余水印杂物、无乱码，竖版构图 3:4。"
+            f"小红书抖音爆款电商大字报精美海报，画面黄金分割位醒目排版大字报标题：「{text}」，"
+            f"{style}，构图：{angle}，超高清商业摄影质感、光影通透、无乱码，3:4竖版。"
         )
 
     def _resolve_image_base64(self, image_url: str | None) -> str | None:
@@ -264,36 +258,58 @@ class CoverJobManager:
 
             img_b64 = self._resolve_image_base64(req.image_url) if req.mode == "img2img" else None
 
-            for i in range(total):
-                pct = 10 + int(80 * i / total)
-                self._update(
-                    job_id,
-                    progress=pct,
-                    message=f"{mode_desc}生成中 {i + 1}/{total}…",
-                )
-                prompt = self._build_prompt(req, i)
-                task_id = catsapi.create_image_task(
-                    prompt,
-                    image_url=req.image_url if req.mode == "img2img" else None,
-                    image_base64=img_b64,
-                    size=req.size,
-                    quality=req.quality,
-                    rewrite_prompt=req.rewrite_prompt,
-                )
-                urls = catsapi.wait_for_images(task_id)
-                url = urls[0]
-                ext = catsapi.guess_ext(url)
-                filename = f"cover_{i + 1:02d}{ext}"
-                dest = out_dir / filename
-                catsapi.download_image(url, dest)
-                results.append(
-                    CoverResult(
+            def _generate_item(i: int) -> CoverResult:
+                try:
+                    prompt = self._build_prompt(req, i)
+                    task_id = catsapi.create_image_task(
+                        prompt,
+                        image_url=req.image_url if (req.mode == "img2img" and req.image_url and req.image_url.startswith("http")) else None,
+                        image_base64=img_b64,
+                        size=req.size,
+                        quality=req.quality,
+                        rewrite_prompt=req.rewrite_prompt,
+                    )
+                    urls = catsapi.wait_for_images(task_id, timeout_seconds=90)
+                    url = urls[0]
+                    ext = catsapi.guess_ext(url)
+                    filename = f"cover_{i + 1:02d}{ext}"
+                    dest = out_dir / filename
+                    catsapi.download_image(url, dest)
+                    return CoverResult(
                         id=f"{job_id}-{i + 1}",
                         url=f"/api/media/covers/{job_id}/{filename}",
                         remote_url=url,
+                        headline=req.headline.strip(),
                     )
-                )
-                self._update(job_id, results=list(results))
+                except Exception:
+                    # 单张失败兜底生成 SVG 保证用户批量完整交付
+                    svg_name = f"cover_{i + 1:02d}.svg"
+                    svg_dest = out_dir / svg_name
+                    svg_content = _build_svg_cover(
+                        req.headline.strip(),
+                        index=i,
+                        style=req.style,
+                    )
+                    svg_dest.write_text(svg_content, encoding="utf-8")
+                    return CoverResult(
+                        id=f"{job_id}-{i + 1}",
+                        url=f"/api/media/covers/{job_id}/{svg_name}",
+                        remote_url=None,
+                        headline=req.headline.strip(),
+                    )
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=total) as pool:
+                futures = [pool.submit(_generate_item, i) for i in range(total)]
+                for idx, fut in enumerate(futures):
+                    res = fut.result()
+                    results.append(res)
+                    pct = 10 + int(80 * (idx + 1) / total)
+                    self._update(
+                        job_id,
+                        progress=pct,
+                        message=f"{mode_desc}生成中 {idx + 1}/{total}…",
+                        results=list(results),
+                    )
 
             self._update(
                 job_id,
@@ -592,33 +608,25 @@ def generate_video_covers(
     # 3. 如果配置了 AI 接口，使用真实截帧与音频智能提炼大字进行 AI 图生图 (img2img)
     api_key = get_secret("catsapi_key", settings.catsapi_key)
     if api_key:
-        try:
-            for i in range(target_count):
+        def _render_ai_cover(i: int) -> CoverResult | None:
+            try:
                 cur_text = headlines[i]
                 style_prompt = STYLE_HINTS.get(style, STYLE_HINTS["yellow-red"])
                 angle = VARIANT_ANGLES[i % len(VARIANT_ANGLES)]
-                prod_desc = f"商品类别与主题：「{group_name}」。" if group_name else ""
+                prod_desc = f"商品类别：「{group_name}」，" if group_name else ""
 
                 frame_file = extracted_frames[i % len(extracted_frames)] if extracted_frames else None
                 frame_b64 = _image_to_base64(frame_file) if frame_file else None
 
                 if frame_b64:
                     prompt = (
-                        "基于参考底图（视频真实截帧画面）进行专业 AI 电商爆款封面海报图生图重绘美化："
-                        "1. 【严格保真核心主体】：严格保留参考底图中的人物、主播形象、主播手里拿持和展示的商品/服装款式细节与材质特征完全一致，切勿替换成其他无关商品或虚构主体。"
-                        "2. 【画面重构与美化】：将参考底图作为海报画面核心主体，去除杂乱噪点与暗光，大幅提升专业商业摄影级通透柔光与高级质感，背景融合明亮干净的爆款电商带货海报视觉元素（如局部明黄撕纸、吸睛光影）。"
-                        f"3. 【爆款大字报排版】：在画面黄金视觉分割区醒目排版融合大字报主题文案：「{cur_text}」，字形立体饱满、色彩鲜明吸睛，形成强转化视觉冲击力。"
-                        f"4. 【风格与构图】：{style_prompt}。构图版式：{angle}。"
-                        "5. 【成图要求】：3:4 竖版构图，超高清商业广告级画质，文字清晰无乱码，突出真实卖点。"
+                        f"小红书抖音电商爆款大字报封面海报，严格保真参考图中主播人物形象与手里拿持展示的商品款式细节，"
+                        f"在画面黄金分割区域醒目排版大字报标题：「{cur_text}」，{style_prompt}，构图：{angle}，超高清商业广告摄影质感，3:4竖版。"
                     )
                 else:
                     prompt = (
-                        "高颜值、高吸引力的小红书/抖音短视频竖版爆款大字报精美封面海报。"
-                        f"{prod_desc}"
-                        f"在画面黄金分割位醒目展示大字报主题文案：「{cur_text}」。"
-                        f"文字排版与视觉风格：{style_prompt}。"
-                        f"构图版式：{angle}。"
-                        "画面要求：超高清商业摄影质感、光影通透、主体突出、色彩饱和吸睛、无多余水印杂物、无乱码，竖版构图 3:4。"
+                        f"小红书抖音爆款电商大字报精美海报，{prod_desc}画面黄金分割位醒目排版大字报标题：「{cur_text}」，"
+                        f"{style_prompt}，构图：{angle}，超高清商业摄影质感、光影通透、无乱码，3:4竖版。"
                     )
 
                 task_id = catsapi.create_image_task(
@@ -634,16 +642,22 @@ def generate_video_covers(
                     filename = f"cover_{i + 1:02d}{ext}"
                     dest = out_dir / filename
                     catsapi.download_image(url, dest)
-                    results.append(
-                        CoverResult(
-                            id=f"{job_id}-{i + 1}",
-                            url=f"/api/media/covers/{job_id}/{filename}",
-                            remote_url=url,
-                            headline=cur_text,
-                        )
+                    return CoverResult(
+                        id=f"{job_id}-{i + 1}",
+                        url=f"/api/media/covers/{job_id}/{filename}",
+                        remote_url=url,
+                        headline=cur_text,
                     )
-        except Exception:
-            pass
+            except Exception:
+                pass
+            return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=target_count) as pool:
+            futures = [pool.submit(_render_ai_cover, i) for i in range(target_count)]
+            for fut in futures:
+                res = fut.result()
+                if res:
+                    results.append(res)
 
     # 4. 若无 AI 密钥或 AI 接口异常，关联真实成片截帧与音频文案的高清大字报海报
     if len(results) < target_count:
