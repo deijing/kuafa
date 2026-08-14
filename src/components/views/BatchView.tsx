@@ -1501,7 +1501,7 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
                                     e.stopPropagation()
                                     handleOpenPreview(coversList.map((item) => item.url), idx)
                                   }}
-                                  className="relative group size-11 shrink-0 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-900 cursor-pointer"
+                                  className="relative group w-10 h-16 shrink-0 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-900 cursor-pointer shadow-2xs hover:ring-2 hover:ring-blue-500 transition-all"
                                   title={c.headline ? `【${c.headline}】· 点击放大预览` : "点击放大预览封面"}
                                 >
                                   <img src={c.url} alt="" className="size-full object-cover" />
@@ -1591,30 +1591,46 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
               </div>
 
               {previewJob?.covers && previewJob.covers.length > 0 && (
-                <div className="w-full md:w-[280px] shrink-0 border-t md:border-t-0 md:border-l border-slate-800 bg-slate-900/95 p-4 flex flex-col overflow-y-auto">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Sparkles className="size-4 text-amber-400 shrink-0" />
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-100">
-                        基于本切片卖点生成的封面
-                      </h4>
-                      {previewJob.headline && (
-                        <p className="text-[11px] text-slate-400 truncate max-w-[200px]">
-                          文案：「{previewJob.headline}」
-                        </p>
-                      )}
+                <div className="w-full md:w-[320px] shrink-0 border-t md:border-t-0 md:border-l border-slate-800 bg-slate-900/95 p-4 flex flex-col h-full overflow-hidden">
+                  <div className="flex items-center justify-between gap-2 mb-3 shrink-0 pb-2 border-b border-slate-800">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="size-4 text-amber-400 shrink-0" />
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-100">
+                          配套 9:16 封面 ({previewJob.covers.length}张)
+                        </h4>
+                        {previewJob.headline && (
+                          <p className="text-[11px] text-slate-400 truncate max-w-[180px]">
+                            文案：「{previewJob.headline}」
+                          </p>
+                        )}
+                      </div>
                     </div>
+                    <button
+                      type="button"
+                      disabled={generatingCoverJobId === previewJob.id || busy}
+                      onClick={() => void handleGenerateCoversForJob(previewJob.id)}
+                      className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-all border border-slate-700"
+                      title="为当前成片重新图生图 3 张封面"
+                    >
+                      {generatingCoverJobId === previewJob.id ? (
+                        <Loader2 className="size-3 animate-spin text-blue-400" />
+                      ) : (
+                        <Sparkles className="size-3 text-amber-400" />
+                      )}
+                      重生封面
+                    </button>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-1 gap-3 flex-1 overflow-y-auto">
+                  <div className="flex-1 overflow-y-auto space-y-3.5 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
                     {previewJob.covers.map((cover, idx) => (
                       <div
                         key={cover.id}
-                        className="group relative flex flex-col rounded-xl border border-slate-800 bg-slate-950 p-2 transition-all hover:border-blue-500"
+                        className="group relative flex flex-col rounded-xl border border-slate-800 bg-slate-950 p-2 transition-all hover:border-blue-500 shadow-sm"
                       >
                         <div
                           onClick={() => handleOpenPreview(previewJob.covers!.map((c) => c.url), idx)}
-                          className="relative aspect-[9/16] max-h-[280px] w-full mx-auto overflow-hidden rounded-lg bg-slate-900 cursor-pointer shadow-sm"
+                          className="relative aspect-[9/16] w-full max-h-[340px] mx-auto overflow-hidden rounded-lg bg-slate-900 cursor-pointer shadow-inner"
                           title="点击放大预览"
                         >
                           <img

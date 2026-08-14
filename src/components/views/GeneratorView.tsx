@@ -1138,30 +1138,30 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
 
               {/* Generated Covers Panel */}
               {job?.covers && job.covers.length > 0 && (
-                <div className="w-full md:w-[300px] shrink-0 border-t md:border-t-0 md:border-l border-slate-800 bg-slate-900/95 p-4 flex flex-col overflow-y-auto">
-                  <div className="flex items-center gap-2 mb-3">
+                <div className="w-full md:w-[320px] shrink-0 border-t md:border-t-0 md:border-l border-slate-800 bg-slate-900/95 p-4 flex flex-col h-full overflow-hidden">
+                  <div className="flex items-center gap-2 mb-3 shrink-0 pb-2 border-b border-slate-800">
                     <Sparkles className="size-4 text-amber-400 shrink-0" />
                     <div>
                       <h4 className="text-xs font-bold text-slate-100">
-                        基于本视频卖点生成的封面
+                        配套 9:16 封面 ({job.covers.length}张)
                       </h4>
                       {job.headline && (
-                        <p className="text-[11px] text-slate-400 truncate max-w-[220px]">
+                        <p className="text-[11px] text-slate-400 truncate max-w-[200px]">
                           文案：「{job.headline}」
                         </p>
                       )}
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-1 gap-3 flex-1 overflow-y-auto">
+                  <div className="flex-1 overflow-y-auto space-y-3.5 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
                     {job.covers.map((cover, idx) => (
                       <div
                         key={cover.id}
-                        className="group relative flex flex-col rounded-xl border border-slate-800 bg-slate-950 p-2 transition-all hover:border-blue-500"
+                        className="group relative flex flex-col rounded-xl border border-slate-800 bg-slate-950 p-2 transition-all hover:border-blue-500 shadow-sm"
                       >
                         <div
                           onClick={() => handleOpenPreview(job.covers!.map((c) => c.url), idx)}
-                          className="relative aspect-[9/16] max-h-[280px] w-full mx-auto overflow-hidden rounded-lg bg-slate-900 cursor-pointer shadow-sm"
+                          className="relative aspect-[9/16] w-full max-h-[340px] mx-auto overflow-hidden rounded-lg bg-slate-900 cursor-pointer shadow-inner"
                           title="点击放大预览"
                         >
                           <img

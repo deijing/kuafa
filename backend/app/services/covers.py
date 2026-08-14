@@ -888,46 +888,53 @@ def generate_video_covers(
     if v_path and v_path.exists():
         extracted_frames = extract_multiple_video_frames(v_path, count=target_count, out_dir=out_dir)
 
-    # 3. 如果配置了 AI 接口，使用真实截帧与音频智能提炼大字进行 16:9 4K AI 图生图 (img2img)
+    # 3. 如果配置了 AI 接口，使用真实截帧与音频智能提炼大字进行竖版 9:16 4K AI 图生图 (img2img)
     api_key = get_secret("catsapi_key", settings.catsapi_key)
     if api_key:
         def _render_ai_cover(i: int) -> CoverResult | None:
+            # 适度微交错请求，避免同毫秒并发触发上游网关限频
+            if i > 0:
+                time.sleep(i * 0.5)
+
             with _IMAGE_GEN_SEMAPHORE:
-                try:
-                    cur_text = headlines[i]
-                    frame_file = extracted_frames[i % len(extracted_frames)] if extracted_frames else None
-                    frame_b64 = _image_to_base64(frame_file) if frame_file else None
+                cur_text = headlines[i]
+                frame_file = extracted_frames[i % len(extracted_frames)] if extracted_frames else None
+                frame_b64 = _image_to_base64(frame_file) if frame_file else None
 
-                    prompt = build_live_cover_prompt(
-                        headline=cur_text,
-                        is_img2img=bool(frame_b64),
-                        group_name=group_name,
-                        style=style,
-                        index=i,
-                        aspect_ratio=aspect_ratio,
-                    )
+                prompt = build_live_cover_prompt(
+                    headline=cur_text,
+                    is_img2img=bool(frame_b64),
+                    group_name=group_name,
+                    style=style,
+                    index=i,
+                    aspect_ratio=aspect_ratio,
+                )
 
-                    task_id = catsapi.create_image_task(
-                        prompt,
-                        image_base64=frame_b64,
-                        size=size or "1792x1024",
-                        quality=quality or "high",
-                    )
-                    urls = catsapi.wait_for_images(task_id, timeout_seconds=90)
-                    if urls:
-                        url = urls[0]
-                        ext = catsapi.guess_ext(url)
-                        filename = f"cover_{i + 1:02d}{ext}"
-                        dest = out_dir / filename
-                        catsapi.download_image(url, dest)
-                        return CoverResult(
-                            id=f"{job_id}-{i + 1}",
-                            url=f"/api/media/covers/{job_id}/{filename}",
-                            remote_url=url,
-                            headline=cur_text,
+                # 最多尝试 2 次，保障多图并发时的鲁棒性
+                for attempt in range(2):
+                    try:
+                        task_id = catsapi.create_image_task(
+                            prompt,
+                            image_base64=frame_b64,
+                            size=size or "1024x1536",
+                            quality=quality or "high",
                         )
-                except Exception:
-                    pass
+                        urls = catsapi.wait_for_images(task_id, timeout_seconds=180)
+                        if urls:
+                            url = urls[0]
+                            ext = catsapi.guess_ext(url)
+                            filename = f"cover_{i + 1:02d}{ext}"
+                            dest = out_dir / filename
+                            catsapi.download_image(url, dest)
+                            return CoverResult(
+                                id=f"{job_id}-{i + 1}",
+                                url=f"/api/media/covers/{job_id}/{filename}",
+                                remote_url=url,
+                                headline=cur_text,
+                            )
+                    except Exception as exc:
+                        logger.warning("AI生图第%d张(尝试%d)异常: %s", i + 1, attempt + 1, exc)
+                        time.sleep(2.0)
                 return None
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=target_count) as pool:
