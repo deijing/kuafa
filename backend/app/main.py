@@ -55,7 +55,12 @@ from app.models import (
 )
 from app.services import catsapi
 from app.services import db as store
-from app.services.covers import cover_jobs, extract_audio_headlines, extract_video_frame
+from app.services.covers import (
+    cover_jobs,
+    extract_audio_headlines,
+    extract_video_frame,
+    resolve_media_path,
+)
 from app.services.ffmpeg_pipeline import probe
 from app.services.jobs import jobs
 from app.services.materials import (
@@ -549,18 +554,17 @@ def extract_frame_from_video(req: ExtractFrameRequest) -> ExtractFrameOut:
     elif req.video_url:
         if req.video_url.startswith("/api/outputs/"):
             fname = req.video_url.split("/")[-1]
-            p = settings.outputs_dir / fname
-            if p.exists():
+            p = resolve_media_path(settings.outputs_dir, fname)
+            if p and p.exists():
                 video_path = p
         elif req.video_url.startswith("/api/materials/"):
+            # 前端视频地址格式：/api/materials/{id}/video
             parts = req.video_url.split("/")
-            if len(parts) >= 4 and parts[3] == "video":
-                mat_id = parts[2]
-                mat = store.get_material(mat_id)
+            if len(parts) >= 5 and parts[4] == "video":
+                mat = store.get_material(parts[3])
                 if mat and mat.path and Path(mat.path).exists():
                     video_path = Path(mat.path)
-        elif Path(req.video_url).exists():
-            video_path = Path(req.video_url)
+        # 不再接受任意本地文件系统路径，防止任意文件访问
 
     if not video_path or not video_path.exists():
         raise HTTPException(404, "未找到目标视频文件")
@@ -622,15 +626,17 @@ def extract_headlines(req: ExtractHeadlinesRequest) -> ExtractHeadlinesOut:
     elif req.video_url:
         if req.video_url.startswith("/api/outputs/"):
             fname = req.video_url.split("/")[-1]
-            video_path = settings.outputs_dir / fname
+            p = resolve_media_path(settings.outputs_dir, fname)
+            if p and p.exists():
+                video_path = p
         elif req.video_url.startswith("/api/materials/"):
+            # 前端视频地址格式：/api/materials/{id}/video
             parts = req.video_url.split("/")
-            if len(parts) >= 4:
+            if len(parts) >= 5 and parts[4] == "video":
                 mat = store.get_material(parts[3])
                 if mat and mat.path and Path(mat.path).exists():
                     video_path = Path(mat.path)
-        elif Path(req.video_url).exists():
-            video_path = Path(req.video_url)
+        # 不再接受任意本地文件系统路径，防止任意文件访问
 
     headlines = extract_audio_headlines(
         audio_transcript=req.audio_text,

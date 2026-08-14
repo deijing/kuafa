@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     catsapi_key: str = ""
     catsapi_base: str = "https://catsapi.com/api"
     catsapi_model: str = "gptImage2"
-    cover_size: str = "1024x1536"
-    cover_quality: str = "auto"
+    cover_size: str = "1792x1024"
+    cover_quality: str = "high"
 
     # OpenAI-compatible（推荐 DeepSeek V4 Pro 做带货选句主观判断）
     openai_api_key: str = ""

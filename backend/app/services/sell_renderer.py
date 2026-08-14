@@ -210,6 +210,7 @@ def render_sell_video(
     magic_cues: list[MagicCue] | None = None,
     speech_speed: float = 1.0,
     subtitle_position: str = "high",
+    video_quality: str = "1080p",
     on_progress,
 ) -> float:
     if not clips:
@@ -219,7 +220,18 @@ def render_sell_video(
     work = settings.work_dir / output.stem
     work.mkdir(parents=True, exist_ok=True)
 
-    w, h, fps = settings.target_width, settings.target_height, settings.target_fps
+    # 动态根据用户选择的画质设置分辨率与 CRF 压缩质量
+    vq = (video_quality or "1080p").lower()
+    if vq == "4k":
+        w, h, crf_val, preset_val = 2160, 3840, "17", "fast"
+    elif vq == "2k":
+        w, h, crf_val, preset_val = 1440, 2560, "19", "veryfast"
+    elif vq == "720p":
+        w, h, crf_val, preset_val = 720, 1280, "26", "veryfast"
+    else:  # 1080p 默认
+        w, h, crf_val, preset_val = 1080, 1920, "22", "veryfast"
+
+    fps = settings.target_fps
     segment_files: list[Path] = []
     n = len(clips)
 
@@ -269,9 +281,9 @@ def render_sell_video(
             "-c:v",
             "libx264",
             "-preset",
-            "veryfast",
+            preset_val,
             "-crf",
-            "22",
+            crf_val,
             "-profile:v",
             "high",
             "-c:a",
@@ -344,9 +356,9 @@ def render_sell_video(
                 "-c:v",
                 "libx264",
                 "-preset",
-                "veryfast",
+                preset_val,
                 "-crf",
-                "22",
+                crf_val,
                 "-c:a",
                 "copy",
                 "-movflags",

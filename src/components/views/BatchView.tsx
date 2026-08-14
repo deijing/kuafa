@@ -49,6 +49,7 @@ import {
   type CoverStyle,
   type DurationPreference,
   type Job,
+  type VideoQuality,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
@@ -58,14 +59,11 @@ const COMMON_NEGATIVE_PRESETS = [
   "去拍",
   "下方链接",
   "关注主播",
-  "加入粉丝团",
-  "公屏扣1",
-  "主播身材",
-  "私信客服",
-  "拍一发三",
-] as const
+  "赶紧去买",
+  "左下角下单",
+]
 
-type BatchViewProps = {
+interface BatchViewProps {
   onGoLibrary?: () => void
   onGoHistory?: () => void
 }
@@ -78,6 +76,7 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
   const [countInput, setCountInput] = useState<string>("3")
   const [durationKey, setDurationKey] = useState<string>("s45")
   const [customSeconds, setCustomSeconds] = useState<number>(45)
+  const [videoQuality, setVideoQuality] = useState<VideoQuality>("1080p")
   const [speechSpeed, setSpeechSpeed] = useState<number>(1.0)
   const [randomizeIntro, setRandomizeIntro] = useState<boolean>(true)
   const [subtitlePosition, setSubtitlePosition] = useState<"high" | "mid" | "low">("high")
@@ -224,6 +223,7 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
     setPreviewJobId(null)
     setError(null)
     setSelectedExportJobIds([])
+    setVideoQuality("1080p")
     setBusy(false)
     notify({
       title: "已新建批量生成页面",
@@ -452,6 +452,7 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
             duration_preference: durationPref,
             target_seconds: targetSeconds,
             speech_speed: speechSpeed,
+            video_quality: videoQuality,
             randomize_intro: randomizeIntro,
             subtitle_position: subtitlePosition,
             add_captions: addSubtitles,
@@ -692,6 +693,68 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
                       </span>
                     ) : null}
                   </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
+
+            {/* 成片画质规格 */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 flex items-center gap-1.5">
+                  <Sparkles className="size-3.5 text-blue-600" />
+                  <span>成片输出画质</span>
+                </h4>
+                <span className="text-[10px] font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded-md">
+                  {videoQuality === "4k"
+                    ? "4K 超清 · 母带级"
+                    : videoQuality === "2k"
+                    ? "2K 极清 · 蓝光级"
+                    : videoQuality === "720p"
+                    ? "720P · 极速出片"
+                    : "1080P · 推荐默认"}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { id: "1080p", label: "1080P 全高清", sub: "1080×1920", badge: "推荐" },
+                  { id: "4k", label: "4K 超高清", sub: "2160×3840", badge: "超清" },
+                  { id: "2k", label: "2K 极清", sub: "1440×2560", badge: "蓝光" },
+                  { id: "720p", label: "720P 高清", sub: "720×1280", badge: "极速" },
+                ].map((q) => (
+                  <button
+                    key={q.id}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setVideoQuality(q.id as VideoQuality)}
+                    className={cn(
+                      "relative flex flex-col items-start p-2.5 rounded-xl text-left border transition-all cursor-pointer",
+                      videoQuality === q.id
+                        ? "bg-blue-50/80 dark:bg-blue-950/50 border-blue-500 ring-2 ring-blue-500/20 text-blue-950 dark:text-blue-200 font-bold shadow-2xs"
+                        : "bg-white dark:bg-slate-800/80 border-slate-200 dark:border-slate-700/80 hover:border-slate-300 text-slate-700 dark:text-slate-300"
+                    )}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <span className="text-xs font-bold">{q.label}</span>
+                      {q.badge && (
+                        <span
+                          className={cn(
+                            "text-[9px] px-1 py-0.2 rounded font-semibold",
+                            q.badge === "推荐"
+                              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                              : q.badge === "超清"
+                              ? "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300"
+                              : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                          )}
+                        >
+                          {q.badge}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-0.5 leading-tight">{q.sub}</span>
+                  </button>
                 ))}
               </div>
             </div>
@@ -1551,7 +1614,7 @@ export function BatchView({ onGoLibrary, onGoHistory }: BatchViewProps) {
                       >
                         <div
                           onClick={() => handleOpenPreview(previewJob.covers!.map((c) => c.url), idx)}
-                          className="relative aspect-[3/4] w-full overflow-hidden rounded-lg bg-slate-900 cursor-pointer"
+                          className="relative aspect-video w-full overflow-hidden rounded-lg bg-slate-900 cursor-pointer"
                           title="点击放大预览"
                         >
                           <img

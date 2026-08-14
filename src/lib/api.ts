@@ -55,12 +55,15 @@ export type BgmItem = {
   size_bytes: number
 }
 
+export type VideoQuality = "4k" | "2k" | "1080p" | "720p"
+
 export type GeneratePayload = {
   material_ids: string[]
   group_id?: string | null
   duration_preference: DurationPreference
   target_seconds?: number
   speech_speed?: number
+  video_quality?: VideoQuality
   randomize_intro?: boolean
   subtitle_position?: "high" | "mid" | "low"
   add_captions: boolean
@@ -87,6 +90,7 @@ export type BatchGeneratePayload = {
   duration_preference: DurationPreference
   target_seconds?: number
   speech_speed?: number
+  video_quality?: VideoQuality
   randomize_intro?: boolean
   subtitle_position?: "high" | "mid" | "low"
   add_captions: boolean
@@ -139,7 +143,7 @@ export type CoverJob = {
 }
 
 export type CoverMode = "text2img" | "img2img"
-export type CoverSize = "1024x1536" | "1024x1024" | "1536x1024"
+export type CoverSize = "1792x1024" | "1024x1536" | "1024x1024" | "1536x1024" | "1920x1080"
 export type CoverQuality = "auto" | "high" | "medium" | "low"
 
 export type CoverPayload = {

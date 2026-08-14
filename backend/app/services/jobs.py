@@ -39,6 +39,9 @@ TARGET_SECONDS = {
 
 _JOB_ID_RE = re.compile(r"^[a-f0-9]{8,32}$")
 
+# 全局成片渲染并发闸：批量成片最多同时跑 4 条，避免同时起几十路 FFmpeg 打爆本机
+_RUN_SEMAPHORE = threading.Semaphore(4)
+
 
 class JobManager:
     def __init__(self) -> None:
@@ -215,6 +218,7 @@ class JobManager:
         return BatchGenerateOut(jobs=created)
 
     def _run(self, job_id: str, materials, req: GenerateRequest) -> None:
+        _RUN_SEMAPHORE.acquire()
         try:
             add_subs = (
                 req.add_subtitles
@@ -308,6 +312,7 @@ class JobManager:
                     magic_cues=magic_cues,
                     speech_speed=speech_speed,
                     subtitle_position=req.subtitle_position,
+                    video_quality=req.video_quality.value if hasattr(req.video_quality, "value") else str(req.video_quality),
                     on_progress=on_progress,
                 )
             else:
@@ -345,6 +350,9 @@ class JobManager:
                     audio_transcript=audio_sentences,
                     group_name=group_name,
                     count=3,
+                    aspect_ratio="16:9",
+                    size="1792x1024",
+                    quality="high",
                 )
             except Exception:
                 covers = []
@@ -379,6 +387,7 @@ class JobManager:
                     shutil.rmtree(work_dir)
                 except Exception:
                     pass
+            _RUN_SEMAPHORE.release()
 
     def generate_covers_for_job(
         self,
@@ -408,6 +417,9 @@ class JobManager:
             group_name=group_name,
             count=count,
             style=style,
+            aspect_ratio="16:9",
+            size="1792x1024",
+            quality="high",
         )
 
         final_headline = (new_covers[0].headline if new_covers and new_covers[0].headline else None) or target_headline or "爆款带货 极速出片"

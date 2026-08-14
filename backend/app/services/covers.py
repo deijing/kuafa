@@ -21,41 +21,125 @@ from app.services.openai_client import chat_completions, has_openai_key
 from app.services.secrets import get_secret
 
 STYLE_HINTS = {
-    "yellow-red": "小红书爆款海报风格，高明度黄红撞色大字，强吸引力商品美化摄影",
-    "black-yellow": "极简黑金高级感海报，精致光影摄影，极致商品质感与高级调性",
-    "red-white": "醒目红白吸引力大字，清新清爽通透光感，高颜值高转化封面海报",
-    "neon-cyber": "立体质感潮流文字，高级景深光影，强视觉冲击力与现代美学",
-    "clean-minimal": "轻奢莫兰迪极简风，柔光写真摄影，大牌杂志质感封面",
-    "festive-gold": "国潮奢华金红配色，高级立体光效，精美礼盒爆款视觉吸引",
+    "yellow-red": "红黄黑高对比爆款配色，粗犷手绘油漆刷痕边缘，米白暖色纸张质感底色",
+    "black-yellow": "黑金高对比高级配色，粗犷手绘油漆刷痕边缘，质感暗纹底色",
+    "red-white": "红白高对比爆款配色，粗犷手绘油漆刷痕边缘，清新通透底色",
+    "neon-cyber": "赛博霓虹高对比配色，立体质感发光边缘，暗黑潮流底色",
+    "clean-minimal": "轻奢莫兰迪质感配色，柔光写实质感，米白温暖底色",
+    "festive-gold": "国潮金红高对比配色，粗犷手绘金边刷痕，喜庆热销底色",
 }
 
 VARIANT_ANGLES = [
-    "主标题置顶醒目布局，画面主体为商品/人物高光特写美化，强化柔光与摄影画质",
-    "主标题贴纸造型，结合高颜值构图与微景深背景，提升画面吸引力与精致感",
-    "主副标题层次分明，画面通透精致，突出商品核心美感与高颜值细节特写",
-    "极简杂志封面构图，高级柔光摄影，干净利落的设计感与强吸引力展示",
+    "左上油漆刷痕引流短句，中上部超大红色价格醒目排版，中央倾斜黄色手刷核心卖点",
+    "中上部超大主标题立体排版，黄色手刷色块突出爆款卖点，下方排列圆角标签",
+    "醒目大字价格置顶，结合商品核心卖点色块，层次分明通透，视觉冲击力强",
+    "极简爆款大字报构图，红黄高对比吸睛卖点，干净利落且强转化吸引力",
 ]
+
+# 全局生图并发闸：避免批量成片时多个任务同时打爆 CatsAPI
+_IMAGE_GEN_SEMAPHORE = threading.Semaphore(6)
+
+
+def resolve_media_path(root: Path, *parts: str) -> Path | None:
+    """在 root 目录内安全解析相对路径，越界（目录穿越）则返回 None。"""
+    try:
+        root_resolved = root.resolve()
+        candidate = root.joinpath(*parts).resolve()
+    except (OSError, ValueError):
+        return None
+    if candidate == root_resolved or candidate.is_relative_to(root_resolved):
+        return candidate
+    return None
 
 
 def extract_video_frame(video_path: Path, timestamp_sec: float, out_jpeg: Path) -> bool:
-    """精准从视频特定时间点截取单帧高清 JPEG 图片。"""
+    """精准从视频特定时间点截取单帧高清 JPEG 图片。支持快速定位与精确定位双重保障。"""
     try:
         out_jpeg.parent.mkdir(parents=True, exist_ok=True)
-        run_cmd([
-            settings.ffmpeg_bin,
-            "-y",
-            "-ss", f"{max(0.0, timestamp_sec):.2f}",
-            "-i", str(video_path),
-            "-vframes", "1",
-            "-q:v", "2",
-            str(out_jpeg),
-        ], timeout=15)
-        return out_jpeg.exists() and out_jpeg.stat().st_size > 0
+        ts = max(0.0, timestamp_sec)
+
+        # 1. 尝试快速 seek 模式抽帧
+        try:
+            run_cmd([
+                settings.ffmpeg_bin,
+                "-y",
+                "-ss", f"{ts:.2f}",
+                "-i", str(video_path),
+                "-vframes", "1",
+                "-q:v", "2",
+                str(out_jpeg),
+            ], timeout=15)
+            if out_jpeg.exists() and out_jpeg.stat().st_size > 1024:
+                return True
+        except Exception:
+            pass
+
+        # 2. 回退精确逐帧 seek 模式（防止首部关键帧异常或 pts 偏移）
+        try:
+            run_cmd([
+                settings.ffmpeg_bin,
+                "-y",
+                "-i", str(video_path),
+                "-ss", f"{ts:.2f}",
+                "-vframes", "1",
+                "-q:v", "2",
+                str(out_jpeg),
+            ], timeout=20)
+            if out_jpeg.exists() and out_jpeg.stat().st_size > 1024:
+                return True
+        except Exception:
+            pass
+
+        return False
     except Exception:
         return False
 
 
-def _image_to_base64(target_path: Path) -> str | None:
+def extract_multiple_video_frames(
+    video_path: Path,
+    count: int = 3,
+    out_dir: Path | None = None,
+) -> list[Path]:
+    """从视频黄金区间（15%~85%）均匀截取多张不同时间点的高清代表帧，支持图生图多帧独立生成。"""
+    if not video_path or not video_path.exists():
+        return []
+    try:
+        dur = probe(video_path).duration
+    except Exception:
+        dur = 6.0
+
+    target_count = max(1, count)
+    target_dir = out_dir or (settings.covers_dir / "references")
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamps: list[float] = []
+    if dur > 2.0:
+        start_sec = max(0.6, dur * 0.15)
+        end_sec = max(start_sec + 0.5, dur * 0.85)
+        span = end_sec - start_sec
+        step = span / target_count
+        for i in range(target_count):
+            seg_start = start_sec + i * step
+            seg_end = start_sec + (i + 1) * step
+            ts = round(random.uniform(seg_start, seg_end), 2)
+            timestamps.append(ts)
+    else:
+        timestamps = [round(dur * (i + 1) / (target_count + 1), 2) for i in range(target_count)]
+
+    frames: list[Path] = []
+    uid = uuid.uuid4().hex[:8]
+    for idx, ts in enumerate(timestamps):
+        frame_dest = target_dir / f"extracted_{uid}_{idx + 1}.jpg"
+        if extract_video_frame(video_path, ts, frame_dest):
+            frames.append(frame_dest)
+        else:
+            mid_ts = round(dur * 0.5, 2)
+            if extract_video_frame(video_path, mid_ts, frame_dest):
+                frames.append(frame_dest)
+    return frames
+
+
+def _image_to_base64(target_path: Path | None) -> str | None:
     try:
         if target_path and target_path.exists():
             raw = target_path.read_bytes()
@@ -64,6 +148,113 @@ def _image_to_base64(target_path: Path) -> str | None:
     except Exception:
         pass
     return None
+
+
+def _parse_prompt_tokens(headline: str, group_name: str | None, index: int) -> dict[str, Any]:
+    text_clean = headline.strip() or "爆款好物 极速出片"
+    lead_tags = ["🔥爆款疯抢", "⚡️直播间专属", "👑掌柜力荐", "💥限时破价"]
+    lead_tag = lead_tags[index % len(lead_tags)]
+
+    prod_name = group_name.strip() if group_name and group_name.strip() else "热销好物"
+
+    # 尝试从文案中提取价格
+    price_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:元|块|米)|(?:¥|￥)\s*(\d+(?:\.\d+)?)", text_clean)
+    if price_match:
+        p_val = price_match.group(1) or price_match.group(2)
+        price_display = f"¥{p_val}"
+    else:
+        # 无具体数字时使用强吸引力标语
+        price_display = "破价抢购"
+
+    # 核心卖点提炼
+    core_point = text_clean
+    if len(core_point) > 20:
+        core_point = core_point[:18]
+
+    tags_pool = [
+        ["正品现货", "顺丰包邮", "品质保障"],
+        ["显瘦遮肉", "透气舒适", "闭眼入款"],
+        ["专柜同品质", "假一赔十", "破价秒杀"],
+        ["大牌平替", "高颜值好物", "现货直发"],
+    ]
+    tags = tags_pool[index % len(tags_pool)]
+
+    return {
+        "lead_tag": lead_tag,
+        "prod_name": prod_name,
+        "price_display": price_display,
+        "core_point": core_point,
+        "tags": tags,
+    }
+
+
+def build_live_cover_prompt(
+    headline: str,
+    *,
+    is_img2img: bool = True,
+    group_name: str | None = None,
+    style: str = "yellow-red",
+    index: int = 0,
+    aspect_ratio: str = "16:9",
+) -> str:
+    """
+    电商直播促销海报黄金提示词生成器（支持 16:9 横版与 9:16 竖版 4K 超高清商业画质）：
+    - 参考图规则：仅用于继承整体版式、配色、信息层级和直播带货海报风格，不复制具体人物与文案内容，可根据新主题自由替换产品和卖点，但必须保持同类视觉语言。
+    - 画质要求：4K 超高清分辨率商业广告级摄影画质，细腻光影质感，极高清晰度与真实感。
+    - 构图要求：16:9 横版黄金分割排版（左侧密集促销大字报，右侧主播人物与商品实拍特写），严禁遮挡面部与五官。
+    - 负面排除：错字乱码、文字缺失、标签裁切、额外人物或手机、品牌标志、肢体畸形、多余手指、面部变形、模糊、过曝、过饱和、杂乱背景、矢量化人物、塑料皮肤、低清晰度、遮挡面部、脸部被遮挡、居中大白框、手机UI、播放控件、底部小黄车按钮、视频字幕条。
+    """
+    tokens = _parse_prompt_tokens(headline, group_name, index)
+    lead_tag = tokens["lead_tag"]
+    prod_name = tokens["prod_name"]
+    price_display = tokens["price_display"]
+    core_point = tokens["core_point"]
+    tags = tokens["tags"]
+    style_desc = STYLE_HINTS.get(style, STYLE_HINTS["yellow-red"])
+
+    ref_rule = (
+        "【参考图核心规则】：参考图仅用于继承整体版式、配色、信息层级和直播带货海报风格，"
+        "不复制原视频中的具体人物与杂乱文案内容，可根据新主题自由替换产品和卖点，但必须保持同类视觉语言。\n\n"
+        if is_img2img
+        else ""
+    )
+
+    tags_str = "」「".join(tags)
+
+    if aspect_ratio == "16:9":
+        return (
+            f"{ref_rule}"
+            f"混合媒介电商直播促销海报，横版16:9比例，4K超高清分辨率商业广告摄影画质，米白暖色纸张质感背景，整体采用{style_desc}，粗犷手绘刷痕边缘，具有强烈爆款视觉冲击力。\n\n"
+            f"画面构图（横版16:9黄金分割比例）：\n"
+            f"1. 【主体写实】：画面右半部为年轻亚洲主播的4K写实抠图展示，半身构图，手持展示「{prod_name}」，"
+            f"柔和正面棚拍光，真实肤色，服装纹理超清细腻，自然阴影，人物边缘带白色描边与淡投影，人物五官端正清晰自然，严禁遮挡面部。\n"
+            f"2. 【密集促销排版】：画面左半部为吸睛大字报密集排版：\n"
+            f"   - 左上方红色粗糙油漆刷痕内放白字「{lead_tag}」；\n"
+            f"   - 中上部醒目排版超大红色价格数字或爆款大字「{price_display}」，带黑色描边、白色外轮廓与立体投影；\n"
+            f"   - 价格右侧放黑色粗体「{prod_name}」；\n"
+            f"   - 中部倾斜黄色手刷色块承载巨型黑字「{core_point}」；\n"
+            f"   - 下方排列{len(tags)}枚白底黑框圆角标签，依次写「{tags_str}」；\n"
+            f"   - 底角加入不规则白黄刷痕装饰，增强促销氛围。\n\n"
+            f"整体要求：4K 超高清商业广告级摄影画质，横版16:9构图，大字与价格最抢眼，卖点明确，人物真实，信息层级清晰，热闹但不杂乱。\n\n"
+            f"负面：错字乱码、文字缺失、标签裁切、额外人物或手机、品牌标志、肢体畸形、多余手指、面部变形、模糊、过曝、过饱和、杂乱背景、矢量化人物、塑料皮肤、低清晰度、遮挡面部、脸部被遮挡、居中大白框、手机UI、播放控件、底部小黄车按钮、视频字幕条。"
+        )
+
+    # 竖版 9:16 模式
+    return (
+        f"{ref_rule}"
+        f"混合媒介电商直播促销海报，竖版9:16比例，4K超高清分辨率商业广告摄影画质，米白暖色纸张质感背景，整体采用{style_desc}，粗犷手绘刷痕边缘，具有强烈直播带货爆款视觉。\n\n"
+        f"画面下半部为年轻亚洲主播的4K写实抠图展示，半身构图，手持展示「{prod_name}」，"
+        f"柔和正面棚拍光，真实肤色，服装纹理超清细腻，自然阴影，人物边缘带白色描边与淡投影，人物五官端正清晰自然，严禁遮挡面部。\n\n"
+        f"上半部为密集促销排版：\n"
+        f"1. 左上红色粗糙油漆刷痕内放白字「{lead_tag}」；\n"
+        f"2. 中上部放超大红色价格数字或醒目标题「{price_display}」，带黑色描边、白色外轮廓和灰色投影；\n"
+        f"3. 价格右侧放黑色粗体「{prod_name}」；\n"
+        f"4. 中央倾斜黄色手刷色块承载巨型黑字「{core_point}」；\n"
+        f"5. 下方排列{len(tags)}枚白底黑框圆角标签，依次写「{tags_str}」；\n"
+        f"6. 底角加入不规则白黄刷痕装饰，增强促销氛围。\n\n"
+        f"整体要求：4K 超高清商业摄影画质，价格最抢眼，卖点明确，人物真实，信息层级清晰，热闹但不杂乱。\n\n"
+        f"负面：错字乱码、文字缺失、标签裁切、额外人物或手机、品牌标志、肢体畸形、多余手指、面部变形、模糊、过曝、过饱和、杂乱背景、矢量化人物、塑料皮肤、低清晰度、遮挡面部、脸部被遮挡、居中大白框、手机UI、播放控件、底部小黄车按钮、视频字幕条。"
+    )
 
 
 class CoverJobManager:
@@ -181,66 +372,55 @@ class CoverJobManager:
         return job
 
     def _build_prompt(self, req: CoverRequest, index: int) -> str:
-        style = STYLE_HINTS.get(req.style, STYLE_HINTS["yellow-red"])
-        angle = VARIANT_ANGLES[index % len(VARIANT_ANGLES)]
-        text = req.headline.strip()
-        if req.mode == "img2img":
-            return (
-                f"小红书抖音电商爆款大字报封面海报，严格保真参考图中主播人物形象与手里拿持展示的商品款式细节，"
-                f"在画面黄金分割区域醒目排版大字报标题：「{text}」，{style}，构图：{angle}，超高清商业广告摄影质感，3:4竖版。"
-            )
-        return (
-            f"小红书抖音爆款电商大字报精美海报，画面黄金分割位醒目排版大字报标题：「{text}」，"
-            f"{style}，构图：{angle}，超高清商业摄影质感、光影通透、无乱码，3:4竖版。"
+        ratio = "16:9" if req.size in ("1792x1024", "1536x1024", "1920x1080") or not req.size else ("9:16" if req.size == "1024x1536" else "16:9")
+        return build_live_cover_prompt(
+            headline=req.headline,
+            is_img2img=(req.mode == "img2img"),
+            style=req.style,
+            index=index,
+            aspect_ratio=ratio,
         )
 
-    def _resolve_image_base64(self, image_url: str | None) -> str | None:
+    def _resolve_image_targets(self, image_url: str | None, count: int, out_dir: Path) -> tuple[list[Path], list[str | None]]:
+        """解析参考图。若为视频，抽取 count 张不同的代表帧；若为单图，返回复制单图。"""
         if not image_url:
-            return None
+            return [], []
         try:
             target_path: Path | None = None
             if image_url.startswith("/api/media/covers/references/"):
                 fname = image_url.split("/")[-1]
-                target_path = settings.covers_dir / "references" / fname
+                target_path = resolve_media_path(settings.covers_dir / "references", fname)
             elif image_url.startswith("/api/thumbs/"):
                 fname = image_url.split("/")[-1]
-                target_path = settings.thumbs_dir / fname
+                target_path = resolve_media_path(settings.thumbs_dir, fname)
             elif image_url.startswith("/api/media/covers/"):
                 parts = image_url.replace("/api/media/covers/", "").split("/")
-                target_path = settings.covers_dir / Path(*parts)
+                target_path = resolve_media_path(settings.covers_dir, *parts)
             elif image_url.startswith("/api/outputs/"):
                 fname = image_url.split("/")[-1]
-                target_path = settings.outputs_dir / fname
+                target_path = resolve_media_path(settings.outputs_dir, fname)
             elif image_url.startswith("/api/materials/"):
+                # 前端视频地址格式：/api/materials/{id}/video
                 parts = image_url.split("/")
-                if len(parts) >= 4 and parts[3] == "video":
-                    mat_id = parts[2]
-                    mat = store.get_material(mat_id)
+                if len(parts) >= 5 and parts[4] == "video":
+                    mat = store.get_material(parts[3])
                     if mat and mat.path:
                         target_path = Path(mat.path)
-            elif Path(image_url).exists():
-                target_path = Path(image_url)
 
             if target_path and target_path.exists():
-                # 若提供的是视频文件，自动抽取一帧高光随机帧
+                # 若提供的是视频文件，自动抽取 count 帧代表帧
                 if target_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".avi", ".flv", ".webm", ".ts"):
-                    ref_dir = settings.covers_dir / "references"
-                    ref_dir.mkdir(parents=True, exist_ok=True)
-                    frame_dest = ref_dir / f"extracted_{uuid.uuid4().hex[:8]}.jpg"
-                    try:
-                        dur = probe(target_path).duration
-                    except Exception:
-                        dur = 5.0
-                    ts = round(random.uniform(min(0.5, dur * 0.1), max(0.5, dur * 0.9)), 2) if dur > 1.5 else 0.5
-                    if extract_video_frame(target_path, ts, frame_dest):
-                        target_path = frame_dest
-                    else:
-                        return None
+                    ref_dir = out_dir / "references"
+                    frames = extract_multiple_video_frames(target_path, count=count, out_dir=ref_dir)
+                    b64_list = [_image_to_base64(f) for f in frames]
+                    return frames, b64_list
 
-                return _image_to_base64(target_path)
+                # 单张图片文件
+                b64 = _image_to_base64(target_path)
+                return [target_path] * count, [b64] * count
         except Exception:
             pass
-        return None
+        return [], []
 
     def _run(self, job_id: str, req: CoverRequest) -> None:
         try:
@@ -256,47 +436,51 @@ class CoverJobManager:
             out_dir = settings.covers_dir / job_id
             out_dir.mkdir(parents=True, exist_ok=True)
 
-            img_b64 = self._resolve_image_base64(req.image_url) if req.mode == "img2img" else None
+            ref_files, img_b64s = self._resolve_image_targets(req.image_url, total, out_dir) if req.mode == "img2img" else ([], [])
 
             def _generate_item(i: int) -> CoverResult:
-                try:
-                    prompt = self._build_prompt(req, i)
-                    task_id = catsapi.create_image_task(
-                        prompt,
-                        image_url=req.image_url if (req.mode == "img2img" and req.image_url and req.image_url.startswith("http")) else None,
-                        image_base64=img_b64,
-                        size=req.size,
-                        quality=req.quality,
-                        rewrite_prompt=req.rewrite_prompt,
-                    )
-                    urls = catsapi.wait_for_images(task_id, timeout_seconds=90)
-                    url = urls[0]
-                    ext = catsapi.guess_ext(url)
-                    filename = f"cover_{i + 1:02d}{ext}"
-                    dest = out_dir / filename
-                    catsapi.download_image(url, dest)
-                    return CoverResult(
-                        id=f"{job_id}-{i + 1}",
-                        url=f"/api/media/covers/{job_id}/{filename}",
-                        remote_url=url,
-                        headline=req.headline.strip(),
-                    )
-                except Exception:
-                    # 单张失败兜底生成 SVG 保证用户批量完整交付
-                    svg_name = f"cover_{i + 1:02d}.svg"
-                    svg_dest = out_dir / svg_name
-                    svg_content = _build_svg_cover(
-                        req.headline.strip(),
-                        index=i,
-                        style=req.style,
-                    )
-                    svg_dest.write_text(svg_content, encoding="utf-8")
-                    return CoverResult(
-                        id=f"{job_id}-{i + 1}",
-                        url=f"/api/media/covers/{job_id}/{svg_name}",
-                        remote_url=None,
-                        headline=req.headline.strip(),
-                    )
+                with _IMAGE_GEN_SEMAPHORE:
+                    item_ref_file = ref_files[i % len(ref_files)] if ref_files else None
+                    item_b64 = img_b64s[i % len(img_b64s)] if img_b64s else None
+                    try:
+                        prompt = self._build_prompt(req, i)
+                        task_id = catsapi.create_image_task(
+                            prompt,
+                            image_url=req.image_url if (req.mode == "img2img" and req.image_url and req.image_url.startswith("http")) else None,
+                            image_base64=item_b64,
+                            size=req.size,
+                            quality=req.quality,
+                            rewrite_prompt=req.rewrite_prompt,
+                        )
+                        urls = catsapi.wait_for_images(task_id, timeout_seconds=90)
+                        url = urls[0]
+                        ext = catsapi.guess_ext(url)
+                        filename = f"cover_{i + 1:02d}{ext}"
+                        dest = out_dir / filename
+                        catsapi.download_image(url, dest)
+                        return CoverResult(
+                            id=f"{job_id}-{i + 1}",
+                            url=f"/api/media/covers/{job_id}/{filename}",
+                            remote_url=url,
+                            headline=req.headline.strip(),
+                        )
+                    except Exception:
+                        # 单张失败兜底生成优雅大字报 SVG（保证用户批量完整交付且不遮挡人脸）
+                        svg_name = f"cover_{i + 1:02d}.svg"
+                        svg_dest = out_dir / svg_name
+                        svg_content = _build_svg_cover(
+                            req.headline.strip(),
+                            index=i,
+                            frame_jpeg_path=item_ref_file,
+                            style=req.style,
+                        )
+                        svg_dest.write_text(svg_content, encoding="utf-8")
+                        return CoverResult(
+                            id=f"{job_id}-{i + 1}",
+                            url=f"/api/media/covers/{job_id}/{svg_name}",
+                            remote_url=None,
+                            headline=req.headline.strip(),
+                        )
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=total) as pool:
                 futures = [pool.submit(_generate_item, i) for i in range(total)]
@@ -338,107 +522,225 @@ def _build_svg_cover(
     frame_jpeg_path: Path | None = None,
     group_name: str | None = None,
     style: str = "yellow-red",
+    aspect_ratio: str = "16:9",
 ) -> str:
-    text_clean = text.strip() or "爆款热销推荐"
-    chunk_size = 6
-    lines = [text_clean[i : i + chunk_size] for i in range(0, len(text_clean), chunk_size)]
+    """
+    生成高转化大字报海报（支持 16:9 横版与 9:16 竖版 4K 画质，绝不遮挡人物面部与五官）。
+    """
+    tokens = _parse_prompt_tokens(text, group_name, index)
+    lead_tag = tokens["lead_tag"]
+    prod_name = tokens["prod_name"]
+    price_display = tokens["price_display"]
+    core_point = tokens["core_point"]
+    tags = tokens["tags"]
+
+    text_clean = text.strip() or "爆款热销好物"
+
+    if style == "black-yellow":
+        bg_fill = "#09090B"
+        title_color = "#FACC15"
+        chip_bg = "#EAB308"
+        chip_text = "#09090B"
+    elif style == "red-white":
+        bg_fill = "#DC2626"
+        title_color = "#FFFFFF"
+        chip_bg = "#FEF08A"
+        chip_text = "#991B1B"
+    elif style == "neon-cyber":
+        bg_fill = "#050814"
+        title_color = "#22D3EE"
+        chip_bg = "#EC4899"
+        chip_text = "#FFFFFF"
+    elif style == "clean-minimal":
+        bg_fill = "#F8FAFC"
+        title_color = "#0F172A"
+        chip_bg = "#E2E8F0"
+        chip_text = "#0F172A"
+    elif style == "festive-gold":
+        bg_fill = "#991B1B"
+        title_color = "#FDE047"
+        chip_bg = "#D97706"
+        chip_text = "#FFFFFF"
+    else:  # yellow-red 爆款
+        bg_fill = "#991B1B"
+        title_color = "#FACC15"
+        chip_bg = "#DC2626"
+        chip_text = "#FFFFFF"
+
+    # 16:9 横版排版（1920x1080 4K等比高清布局）
+    if aspect_ratio == "16:9":
+        chunk_size = 9
+        lines = [text_clean[i : i + chunk_size] for i in range(0, min(len(text_clean), 18), chunk_size)]
+        if not lines:
+            lines = ["爆款热销好物"]
+
+        img_bg_element = ""
+        if frame_jpeg_path and frame_jpeg_path.exists():
+            try:
+                b64_data = base64.b64encode(frame_jpeg_path.read_bytes()).decode("utf-8")
+                img_bg_element = f'<image href="data:image/jpeg;base64,{b64_data}" width="1920" height="1080" preserveAspectRatio="xMidYMid slice"/>'
+            except Exception:
+                img_bg_element = ""
+
+        title_y_start = 280 if len(lines) > 1 else 320
+        line_h = 110
+        tspan_list = []
+        for i, ln in enumerate(lines[:2]):
+            escaped_ln = html.escape(ln)
+            y = title_y_start + i * line_h
+            tspan_list.append(
+                f'<text x="80" y="{y}" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Impact, sans-serif" font-size="92" font-weight="900" text-anchor="start" fill="{title_color}" stroke="#000000" stroke-width="16" paint-order="stroke fill">{escaped_ln}</text>'
+                f'<text x="80" y="{y}" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Impact, sans-serif" font-size="92" font-weight="900" text-anchor="start" fill="{title_color}">{escaped_ln}</text>'
+            )
+        tspan_str = "\n    ".join(tspan_list)
+
+        tag_elements = []
+        tag_xs = [80, 360, 640]
+        for idx, tg in enumerate(tags[:3]):
+            x = tag_xs[idx]
+            tag_elements.append(
+                f'<g>'
+                f'<rect x="{x}" y="570" width="250" height="58" rx="29" fill="#FFFFFF" fill-opacity="0.96" stroke="#1F2937" stroke-width="3"/>'
+                f'<text x="{x + 125}" y="608" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="26" font-weight="800" text-anchor="middle" fill="#111827">{html.escape(tg)}</text>'
+                f'</g>'
+            )
+        tags_svg = "\n    ".join(tag_elements)
+
+        return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="{bg_fill}" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#111827" stop-opacity="1"/>
+    </linearGradient>
+    <linearGradient id="leftVignette" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0.92"/>
+      <stop offset="45%" stop-color="#000000" stop-opacity="0.75"/>
+      <stop offset="70%" stop-color="#000000" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.75"/>
+    </filter>
+  </defs>
+
+  <!-- 1. 底色或视频代表帧画面（铺满 16:9） -->
+  <rect width="1920" height="1080" fill="url(#bgGrad)"/>
+  {img_bg_element}
+
+  <!-- 2. 左半部暗渐变层：确保大字高对比吸睛，右半部人物与商品完全通透露出 -->
+  <rect width="1280" height="1080" fill="url(#leftVignette)"/>
+
+  <!-- 3. 左上方引流短句刷痕徽章 -->
+  <g filter="url(#glow)">
+    <rect x="80" y="70" width="260" height="66" rx="14" fill="{chip_bg}"/>
+    <text x="210" y="114" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="28" font-weight="900" text-anchor="middle" fill="{chip_text}">{html.escape(lead_tag)}</text>
+  </g>
+
+  <!-- 4. 商品品类提示 -->
+  <g filter="url(#glow)">
+    <rect x="370" y="70" width="280" height="66" rx="33" fill="#000000" fill-opacity="0.65" stroke="#FDE047" stroke-width="2"/>
+    <text x="510" y="112" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="26" font-weight="700" text-anchor="middle" fill="#FEF08A">✨ {html.escape(prod_name)}</text>
+  </g>
+
+  <!-- 5. 左侧大字报文案 -->
+  <g filter="url(#glow)">
+    {tspan_str}
+  </g>
+
+  <!-- 6. 核心卖点手刷色块条 -->
+  <g filter="url(#glow)">
+    <rect x="80" y="470" width="840" height="68" rx="34" fill="#FEF08A" stroke="#EAB308" stroke-width="3"/>
+    <text x="500" y="514" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="32" font-weight="900" text-anchor="middle" fill="#991B1B">💥 {html.escape(core_point)}</text>
+  </g>
+
+  <!-- 7. 白底黑框圆角卖点标签 -->
+  <g filter="url(#glow)">
+    {tags_svg}
+  </g>
+</svg>"""
+
+    # 9:16 竖版排版
+    chunk_size = 7
+    lines = [text_clean[i : i + chunk_size] for i in range(0, min(len(text_clean), 14), chunk_size)]
     if not lines:
-        lines = ["爆款热销推荐"]
+        lines = ["爆款热销好物"]
 
     img_bg_element = ""
     if frame_jpeg_path and frame_jpeg_path.exists():
         try:
             b64_data = base64.b64encode(frame_jpeg_path.read_bytes()).decode("utf-8")
-            img_bg_element = f'<image href="data:image/jpeg;base64,{b64_data}" width="1024" height="1536" preserveAspectRatio="xMidYMid slice"/>'
+            img_bg_element = f'<image href="data:image/jpeg;base64,{b64_data}" width="1080" height="1920" preserveAspectRatio="xMidYMid slice"/>'
         except Exception:
             img_bg_element = ""
 
-    if style == "black-yellow":
-        bg_fill = "#09090B"
-        stroke_color = "#EAB308"
-        title_color = "#FACC15"
-        badge_bg = "#EAB308"
-        badge_text = "#09090B"
-    elif style == "red-white":
-        bg_fill = "#DC2626"
-        stroke_color = "#FFFFFF"
-        title_color = "#FFFFFF"
-        badge_bg = "#FFFFFF"
-        badge_text = "#DC2626"
-    elif style == "neon-cyber":
-        bg_fill = "#0F172A"
-        stroke_color = "#06B6D4"
-        title_color = "#38BDF8"
-        badge_bg = "#EC4899"
-        badge_text = "#FFFFFF"
-    elif style == "clean-minimal":
-        bg_fill = "#F5F5F4"
-        stroke_color = "#292524"
-        title_color = "#1C1917"
-        badge_bg = "#44403C"
-        badge_text = "#FAFAF9"
-    elif style == "festive-gold":
-        bg_fill = "#7F1D1D"
-        stroke_color = "#F59E0B"
-        title_color = "#FDE68A"
-        badge_bg = "#B45309"
-        badge_text = "#FEF3C7"
-    else:  # yellow-red default
-        bg_fill = "#FEF08A"
-        stroke_color = "#DC2626"
-        title_color = "#DC2626"
-        badge_bg = "#DC2626"
-        badge_text = "#FFFFFF"
-
-    badge_label = html.escape(f"🔥 {group_name} · 直播间爆款" if group_name else "🔥 直播间爆款")
-
+    title_y_start = 220 if len(lines) > 1 else 250
+    line_h = 100
     tspan_list = []
-    y_start = 450 - (len(lines[:3]) - 1) * 55
-    for idx, line in enumerate(lines[:3]):
-        y_pos = y_start + idx * 115
-        safe_line = html.escape(line)
+    for i, ln in enumerate(lines[:2]):
+        escaped_ln = html.escape(ln)
+        y = title_y_start + i * line_h
         tspan_list.append(
-            f'<text x="512" y="{y_pos}" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="88" font-weight="900" text-anchor="middle" fill="{title_color}" stroke="#000000" stroke-width="4" paint-order="stroke fill">{safe_line}</text>'
+            f'<text x="540" y="{y}" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Impact, sans-serif" font-size="82" font-weight="900" text-anchor="middle" fill="{title_color}" stroke="#000000" stroke-width="14" paint-order="stroke fill">{escaped_ln}</text>'
+            f'<text x="540" y="{y}" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Impact, sans-serif" font-size="82" font-weight="900" text-anchor="middle" fill="{title_color}">{escaped_ln}</text>'
         )
 
-    tspan_str = "\n".join(tspan_list)
+    tspan_str = "\n    ".join(tspan_list)
 
-    overlay_rect = ""
-    if img_bg_element:
-        overlay_rect = """
-        <rect width="1024" height="600" fill="url(#topGradient)" opacity="0.85"/>
-        <rect y="1200" width="1024" height="336" fill="url(#bottomGradient)" opacity="0.85"/>
-        """
+    tag_elements = []
+    tag_xs = [140, 430, 720]
+    for idx, tg in enumerate(tags[:3]):
+        x = tag_xs[idx]
+        tag_elements.append(
+            f'<g>'
+            f'<rect x="{x}" y="420" width="220" height="54" rx="27" fill="#FFFFFF" fill-opacity="0.95" stroke="#1F2937" stroke-width="3"/>'
+            f'<text x="{x + 110}" y="456" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="24" font-weight="800" text-anchor="middle" fill="#111827">{html.escape(tg)}</text>'
+            f'</g>'
+        )
+    tags_svg = "\n    ".join(tag_elements)
 
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1536" width="1024" height="1536">
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" width="1080" height="1920">
   <defs>
-    <linearGradient id="topGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#000000" stop-opacity="0.8"/>
-      <stop offset="60%" stop-color="#000000" stop-opacity="0.5"/>
-      <stop offset="100%" stop-color="#000000" stop-opacity="0.0"/>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="{bg_fill}" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#111827" stop-opacity="1"/>
     </linearGradient>
-    <linearGradient id="bottomGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#000000" stop-opacity="0.0"/>
-      <stop offset="100%" stop-color="#000000" stop-opacity="0.9"/>
+    <linearGradient id="topVignette" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0.85"/>
+      <stop offset="35%" stop-color="#000000" stop-opacity="0.65"/>
+      <stop offset="60%" stop-color="#000000" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
     </linearGradient>
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.45"/>
+    <filter id="glow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.75"/>
     </filter>
   </defs>
-  <rect width="1024" height="1536" fill="{bg_fill}"/>
+
+  <rect width="1080" height="1920" fill="url(#bgGrad)"/>
   {img_bg_element}
-  {overlay_rect}
-  <g filter="url(#shadow)">
-    <rect x="112" y="90" width="800" height="130" rx="30" fill="{badge_bg}"/>
-    <text x="512" y="175" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="56" font-weight="900" text-anchor="middle" fill="{badge_text}">{badge_label}</text>
+
+  <rect width="1080" height="850" fill="url(#topVignette)"/>
+
+  <g filter="url(#glow)">
+    <rect x="54" y="64" width="270" height="66" rx="14" fill="{chip_bg}"/>
+    <text x="189" y="108" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="28" font-weight="900" text-anchor="middle" fill="{chip_text}">{html.escape(lead_tag)}</text>
   </g>
-  <g filter="url(#shadow)">
-    <rect x="72" y="270" width="880" height="380" rx="36" fill="#FFFFFF" fill-opacity="0.96" stroke="{stroke_color}" stroke-width="8"/>
+
+  <g filter="url(#glow)">
+    <rect x="740" y="64" width="286" height="66" rx="33" fill="#000000" fill-opacity="0.6" stroke="#FDE047" stroke-width="2"/>
+    <text x="883" y="106" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="26" font-weight="700" text-anchor="middle" fill="#FEF08A">✨ {html.escape(prod_name)}</text>
+  </g>
+
+  <g filter="url(#glow)">
     {tspan_str}
   </g>
-  <g filter="url(#shadow)">
-    <rect x="212" y="1360" width="600" height="110" rx="55" fill="{badge_bg}"/>
-    <text x="512" y="1432" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="44" font-weight="800" text-anchor="middle" fill="{badge_text}">✔ 现货速发 · 点击看同款</text>
+
+  <g filter="url(#glow)">
+    <rect x="100" y="340" width="880" height="62" rx="31" fill="#FEF08A" stroke="#EAB308" stroke-width="3"/>
+    <text x="540" y="382" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="30" font-weight="900" text-anchor="middle" fill="#991B1B">💥 {html.escape(core_point)}</text>
+  </g>
+
+  <g filter="url(#glow)">
+    {tags_svg}
   </g>
 </svg>"""
 
@@ -552,13 +854,16 @@ def generate_video_covers(
     group_name: str | None = None,
     count: int = 3,
     style: str = "yellow-red",
+    aspect_ratio: str = "16:9",
+    size: str = "1792x1024",
+    quality: str = "high",
 ) -> list[CoverResult]:
     """
-    基于成片真实画面与音频口播卖点，为成片自动化提取视频画面帧并进行 AI 图生图生成高关联性爆款大字报封面。
+    基于成片真实画面与音频口播卖点，为成片自动化提取 3 帧高清画面并进行 AI 图生图（img2img）生成 16:9 4K 高画质爆款封面海报。
     - 智能分析音频提炼多组爆款大字标语。
-    - 随机从剪辑好的视频中采集不同时间点的高清代表帧。
-    - 以该视频帧作为图生图底图（严格保真人像与手中展示商品），调用 AI 生成爆款海报。
-    - 若未配置 AI 密钥或生图异常，平滑降级为将真实帧作为底图的高清排版海报。
+    - 均匀从剪辑好的视频黄金展示区间（15%~85%）中采集 3 张不同时间点的高清代表帧。
+    - 每一帧作为图生图独立底图（16:9 构图、4K 超清），调用 AI 生成爆款海报。
+    - 若未配置 AI 密钥或生图异常，平滑降级为 16:9 4K 等比高清大字报 SVG（绝不遮挡面部，无伪UI按钮）。
     """
     target_count = max(1, min(count, 4))
     results: list[CoverResult] = []
@@ -578,79 +883,52 @@ def generate_video_covers(
     while len(headlines) < target_count:
         headlines.append(headlines[0] if headlines else "爆款带货 极速出片")
 
-    # 2. 尝试从成片视频中随机分布截取多张高清画面帧
+    # 2. 均匀从成片视频黄金展示区间中抽取多张高清画面帧（默认 3 帧）
     extracted_frames: list[Path] = []
     if v_path and v_path.exists():
-        try:
-            dur = probe(v_path).duration
-        except Exception:
-            dur = 6.0
+        extracted_frames = extract_multiple_video_frames(v_path, count=target_count, out_dir=out_dir)
 
-        # 分段并在每段内随机取点，确保画面多样性
-        timestamps: list[float] = []
-        if dur > 1.5:
-            margin = min(0.6, dur * 0.08)
-            usable_span = max(0.5, dur - 2 * margin)
-            step = usable_span / target_count
-            for i in range(target_count):
-                seg_start = margin + i * step
-                seg_end = margin + (i + 1) * step
-                ts = round(random.uniform(seg_start, seg_end), 2)
-                timestamps.append(ts)
-        else:
-            timestamps = [round(dur * (i + 1) / (target_count + 1), 2) for i in range(target_count)]
-
-        for idx, ts in enumerate(timestamps):
-            frame_path = out_dir / f"frame_src_{idx + 1}.jpg"
-            if extract_video_frame(v_path, ts, frame_path):
-                extracted_frames.append(frame_path)
-
-    # 3. 如果配置了 AI 接口，使用真实截帧与音频智能提炼大字进行 AI 图生图 (img2img)
+    # 3. 如果配置了 AI 接口，使用真实截帧与音频智能提炼大字进行 16:9 4K AI 图生图 (img2img)
     api_key = get_secret("catsapi_key", settings.catsapi_key)
     if api_key:
         def _render_ai_cover(i: int) -> CoverResult | None:
-            try:
-                cur_text = headlines[i]
-                style_prompt = STYLE_HINTS.get(style, STYLE_HINTS["yellow-red"])
-                angle = VARIANT_ANGLES[i % len(VARIANT_ANGLES)]
-                prod_desc = f"商品类别：「{group_name}」，" if group_name else ""
+            with _IMAGE_GEN_SEMAPHORE:
+                try:
+                    cur_text = headlines[i]
+                    frame_file = extracted_frames[i % len(extracted_frames)] if extracted_frames else None
+                    frame_b64 = _image_to_base64(frame_file) if frame_file else None
 
-                frame_file = extracted_frames[i % len(extracted_frames)] if extracted_frames else None
-                frame_b64 = _image_to_base64(frame_file) if frame_file else None
-
-                if frame_b64:
-                    prompt = (
-                        f"小红书抖音电商爆款大字报封面海报，严格保真参考图中主播人物形象与手里拿持展示的商品款式细节，"
-                        f"在画面黄金分割区域醒目排版大字报标题：「{cur_text}」，{style_prompt}，构图：{angle}，超高清商业广告摄影质感，3:4竖版。"
-                    )
-                else:
-                    prompt = (
-                        f"小红书抖音爆款电商大字报精美海报，{prod_desc}画面黄金分割位醒目排版大字报标题：「{cur_text}」，"
-                        f"{style_prompt}，构图：{angle}，超高清商业摄影质感、光影通透、无乱码，3:4竖版。"
-                    )
-
-                task_id = catsapi.create_image_task(
-                    prompt,
-                    image_base64=frame_b64,
-                    size=settings.cover_size,
-                    quality=settings.cover_quality,
-                )
-                urls = catsapi.wait_for_images(task_id, timeout_seconds=90)
-                if urls:
-                    url = urls[0]
-                    ext = catsapi.guess_ext(url)
-                    filename = f"cover_{i + 1:02d}{ext}"
-                    dest = out_dir / filename
-                    catsapi.download_image(url, dest)
-                    return CoverResult(
-                        id=f"{job_id}-{i + 1}",
-                        url=f"/api/media/covers/{job_id}/{filename}",
-                        remote_url=url,
+                    prompt = build_live_cover_prompt(
                         headline=cur_text,
+                        is_img2img=bool(frame_b64),
+                        group_name=group_name,
+                        style=style,
+                        index=i,
+                        aspect_ratio=aspect_ratio,
                     )
-            except Exception:
-                pass
-            return None
+
+                    task_id = catsapi.create_image_task(
+                        prompt,
+                        image_base64=frame_b64,
+                        size=size or "1792x1024",
+                        quality=quality or "high",
+                    )
+                    urls = catsapi.wait_for_images(task_id, timeout_seconds=90)
+                    if urls:
+                        url = urls[0]
+                        ext = catsapi.guess_ext(url)
+                        filename = f"cover_{i + 1:02d}{ext}"
+                        dest = out_dir / filename
+                        catsapi.download_image(url, dest)
+                        return CoverResult(
+                            id=f"{job_id}-{i + 1}",
+                            url=f"/api/media/covers/{job_id}/{filename}",
+                            remote_url=url,
+                            headline=cur_text,
+                        )
+                except Exception:
+                    pass
+                return None
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=target_count) as pool:
             futures = [pool.submit(_render_ai_cover, i) for i in range(target_count)]
@@ -659,7 +937,7 @@ def generate_video_covers(
                 if res:
                     results.append(res)
 
-    # 4. 若无 AI 密钥或 AI 接口异常，关联真实成片截帧与音频文案的高清大字报海报
+    # 4. 若无 AI 密钥或 AI 接口异常，关联真实成片截帧与音频文案的高清 16:9 4K 大字报海报
     if len(results) < target_count:
         start_idx = len(results)
         for i in range(start_idx, target_count):
@@ -673,6 +951,7 @@ def generate_video_covers(
                 frame_jpeg_path=frame_img,
                 group_name=group_name,
                 style=style,
+                aspect_ratio=aspect_ratio,
             )
             dest.write_text(svg_content, encoding="utf-8")
             results.append(

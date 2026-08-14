@@ -54,12 +54,20 @@ class UpdateLibrarySettingsRequest(BaseModel):
     materials_dir: str = Field(min_length=1)
 
 
+class VideoQuality(str, Enum):
+    q4k = "4k"
+    q2k = "2k"
+    q1080p = "1080p"
+    q720p = "720p"
+
+
 class GenerateRequest(BaseModel):
     material_ids: list[str] = Field(default_factory=list)
     group_id: str | None = None
     duration_preference: DurationPreference = DurationPreference.mid
     target_seconds: float | None = Field(default=None, ge=15.0, le=180.0)  # 精确目标时长（秒）
     speech_speed: float = Field(default=1.0, ge=0.8, le=1.5)  # 语速倍率（0.8x - 1.5x）
+    video_quality: VideoQuality = VideoQuality.q1080p  # 4k / 2k / 1080p / 720p
     randomize_intro: bool = True  # 打散/随机开头，避免多条视频开头完全一致
     subtitle_position: Literal["high", "mid", "low"] = "high"  # 字幕垂直位置（high=靠上安全区）
     add_captions: bool = True  # 口播字幕
@@ -94,6 +102,7 @@ class BatchGenerateRequest(BaseModel):
     duration_preference: DurationPreference = DurationPreference.mid
     target_seconds: float | None = Field(default=None, ge=15.0, le=180.0)
     speech_speed: float = Field(default=1.0, ge=0.8, le=1.5)
+    video_quality: VideoQuality = VideoQuality.q1080p  # 4k / 2k / 1080p / 720p
     randomize_intro: bool = True
     subtitle_position: Literal["high", "mid", "low"] = "high"
     add_captions: bool = True
@@ -131,12 +140,12 @@ class CoverStyle(str, Enum):
 class CoverRequest(BaseModel):
     headline: str = Field(min_length=1, max_length=120)
     style: CoverStyle = CoverStyle.yellow_red
-    count: int = Field(default=4, ge=1, le=4)
+    count: int = Field(default=3, ge=1, le=4)
     mode: Literal["text2img", "img2img", "ai"] = "text2img"
     image_url: str | None = None
     material_id: str | None = None
-    size: str = "1024x1536"
-    quality: str = "auto"
+    size: str = "1792x1024"
+    quality: str = "high"
     rewrite_prompt: bool = False
 
 
@@ -194,7 +203,7 @@ class CoverJobOut(BaseModel):
     finished_at: str | None = None
     headline: str = ""
     style: str = "yellow-red"
-    count: int = 4
+    count: int = 3
     results: list[CoverResult] = Field(default_factory=list)
     error: str | None = None
 

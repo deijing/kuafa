@@ -28,6 +28,13 @@ def _base() -> str:
     return get_secret("catsapi_base", settings.catsapi_base).rstrip("/")
 
 
+def _strip_data_uri(value: str) -> str:
+    """剥掉 data:image/...;base64, 前缀，保留纯 base64（兼容旧版 referenceImages 约定）。"""
+    if value.startswith("data:") and "," in value:
+        return value.split(",", 1)[1]
+    return value
+
+
 def create_image_task(
     prompt: str,
     *,
@@ -44,8 +51,27 @@ def create_image_task(
         "quality": quality or settings.cover_quality,
         "size": size or settings.cover_size,
     }
-    if image_url and image_url.startswith("http"):
-        params["imagePrompt"] = image_url
+
+    # 确定参考图：CatsAPI gptImage2 图生图模型要求将参考图放入 params["imagePrompt"]
+    primary_image: str | None = None
+    all_images: list[str] = []
+
+    if image_base64:
+        # 兼容带前缀或纯 base64
+        data_uri = image_base64 if image_base64.startswith("data:") else f"data:image/jpeg;base64,{image_base64}"
+        primary_image = data_uri
+        all_images.append(_strip_data_uri(image_base64))
+    elif input_images:
+        for img in input_images:
+            all_images.append(_strip_data_uri(img))
+        if input_images:
+            primary_image = input_images[0]
+    elif image_url and image_url.startswith("http"):
+        primary_image = image_url
+        all_images.append(image_url)
+
+    if primary_image:
+        params["imagePrompt"] = primary_image
 
     payload: dict[str, Any] = {
         "model": settings.catsapi_model,
@@ -56,15 +82,9 @@ def create_image_task(
     }
 
     # Reference images support
-    if image_base64:
+    if primary_image or all_images:
         payload["input_mode"] = "image_to_image"
-        payload["input_images"] = [image_base64]
-    elif input_images:
-        payload["input_mode"] = "image_to_image"
-        payload["input_images"] = input_images
-    elif image_url and image_url.startswith("http"):
-        payload["input_mode"] = "image_to_image"
-        payload["input_images"] = [image_url]
+        payload["input_images"] = all_images
 
     resp = requests.post(
         f"{_base()}/tasks",
@@ -158,14 +178,14 @@ def test_connection(
     }
     try:
         resp = requests.get(
-            f"{base}/tasks/ping_test",
+            f"{base}/models",
             headers=headers,
             timeout=10,
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
         if resp.status_code in (401, 403):
             return {"ok": False, "message": f"密钥验证失败 ({resp.status_code}): 密钥无效或已过期"}
-        if resp.status_code >= 500:
+        if resp.status_code >= 400:
             return {"ok": False, "message": f"CatsAPI 服务端响应异常 ({resp.status_code})"}
         return {
             "ok": True,
