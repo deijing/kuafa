@@ -144,7 +144,7 @@ class CoverRequest(BaseModel):
     mode: Literal["text2img", "img2img", "ai"] = "text2img"
     image_url: str | None = None
     material_id: str | None = None
-    size: str = "1792x1024"
+    size: str = "1024x1536"
     quality: str = "high"
     rewrite_prompt: bool = False
 

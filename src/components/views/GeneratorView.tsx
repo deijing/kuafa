@@ -1161,7 +1161,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                       >
                         <div
                           onClick={() => handleOpenPreview(job.covers!.map((c) => c.url), idx)}
-                          className="relative aspect-video w-full overflow-hidden rounded-lg bg-slate-900 cursor-pointer"
+                          className="relative aspect-[9/16] max-h-[280px] w-full mx-auto overflow-hidden rounded-lg bg-slate-900 cursor-pointer shadow-sm"
                           title="点击放大预览"
                         >
                           <img

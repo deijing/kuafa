@@ -73,8 +73,8 @@ export function CoverView() {
   const [showMaterialPicker, setShowMaterialPicker] = useState(false)
   const [sourceVideoTitle, setSourceVideoTitle] = useState<string | null>(null)
 
-  // CatsAPI GPT Image 2 Parameters (默认 16:9 4K 超清画质图生图)
-  const [size, setSize] = useState<CoverSize>("1792x1024")
+  // CatsAPI GPT Image 2 Parameters (默认 9:16 4K 超清画质图生图)
+  const [size, setSize] = useState<CoverSize>("1024x1536")
   const [count, setCount] = useState<number>(3)
   const [quality, setQuality] = useState<CoverQuality>("high")
 
@@ -182,7 +182,7 @@ export function CoverView() {
     setRefImage(null)
     setSourceVideoTitle(null)
     setExtractedHeadlines([])
-    setSize("1792x1024")
+    setSize("1024x1536")
     setCount(3)
     setQuality("high")
     setError(null)
@@ -190,7 +190,7 @@ export function CoverView() {
     setBusy(false)
     notify({
       title: "已新建封面工作台",
-      message: "已重置底图与文案，可上传新图或选择视频即时图生图 (16:9 4K)",
+      message: "已重置底图与文案，可上传新图或选择视频即时图生图 (9:16 4K)",
       type: "info",
     })
   }, [notify])
@@ -872,18 +872,6 @@ export function CoverView() {
                 <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-xl border border-slate-200/70 dark:border-slate-700/70">
                   <button
                     type="button"
-                    onClick={() => setSize("1792x1024")}
-                    className={cn(
-                      "py-1 rounded-lg text-xs font-bold transition-all cursor-pointer",
-                      size === "1792x1024" || size === "1536x1024" || size === "1920x1080"
-                        ? "bg-white text-purple-700 shadow-2xs dark:bg-slate-900 dark:text-purple-300"
-                        : "text-slate-500 hover:text-slate-800 dark:text-slate-400"
-                    )}
-                  >
-                    16:9 (4K)
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setSize("1024x1536")}
                     className={cn(
                       "py-1 rounded-lg text-xs font-bold transition-all cursor-pointer",
@@ -893,6 +881,18 @@ export function CoverView() {
                     )}
                   >
                     9:16 (4K)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSize("1792x1024")}
+                    className={cn(
+                      "py-1 rounded-lg text-xs font-bold transition-all cursor-pointer",
+                      size === "1792x1024" || size === "1536x1024" || size === "1920x1080"
+                        ? "bg-white text-purple-700 shadow-2xs dark:bg-slate-900 dark:text-purple-300"
+                        : "text-slate-500 hover:text-slate-800 dark:text-slate-400"
+                    )}
+                  >
+                    16:9 (4K)
                   </button>
                   <button
                     type="button"
@@ -924,7 +924,7 @@ export function CoverView() {
             ) : (
               <ImagePlus className="mr-2 size-4.5" />
             )}
-            {busy ? `正在图生图 (${count} 张海报)…` : `开始 AI 图生图 (生成 ${count} 张 16:9 4K封面)`}
+            {busy ? `正在图生图 (${count} 张海报)…` : `开始 AI 图生图 (生成 ${count} 张 9:16 4K封面)`}
           </Button>
         </CardContent>
       </Card>

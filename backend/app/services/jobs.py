@@ -350,8 +350,8 @@ class JobManager:
                     audio_transcript=audio_sentences,
                     group_name=group_name,
                     count=3,
-                    aspect_ratio="16:9",
-                    size="1792x1024",
+                    aspect_ratio="9:16",
+                    size="1024x1536",
                     quality="high",
                 )
             except Exception:
@@ -417,8 +417,8 @@ class JobManager:
             group_name=group_name,
             count=count,
             style=style,
-            aspect_ratio="16:9",
-            size="1792x1024",
+            aspect_ratio="9:16",
+            size="1024x1536",
             quality="high",
         )
 

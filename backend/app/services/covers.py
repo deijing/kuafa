@@ -195,7 +195,7 @@ def build_live_cover_prompt(
     group_name: str | None = None,
     style: str = "yellow-red",
     index: int = 0,
-    aspect_ratio: str = "16:9",
+    aspect_ratio: str = "9:16",
 ) -> str:
     """
     电商直播促销海报黄金提示词生成器（支持 16:9 横版与 9:16 竖版 4K 超高清商业画质）：
@@ -522,7 +522,7 @@ def _build_svg_cover(
     frame_jpeg_path: Path | None = None,
     group_name: str | None = None,
     style: str = "yellow-red",
-    aspect_ratio: str = "16:9",
+    aspect_ratio: str = "9:16",
 ) -> str:
     """
     生成高转化大字报海报（支持 16:9 横版与 9:16 竖版 4K 画质，绝不遮挡人物面部与五官）。
@@ -854,16 +854,16 @@ def generate_video_covers(
     group_name: str | None = None,
     count: int = 3,
     style: str = "yellow-red",
-    aspect_ratio: str = "16:9",
-    size: str = "1792x1024",
+    aspect_ratio: str = "9:16",
+    size: str = "1024x1536",
     quality: str = "high",
 ) -> list[CoverResult]:
     """
-    基于成片真实画面与音频口播卖点，为成片自动化提取 3 帧高清画面并进行 AI 图生图（img2img）生成 16:9 4K 高画质爆款封面海报。
+    基于成片真实画面与音频口播卖点，为成片自动化提取 3 帧高清画面并进行 AI 图生图（img2img）生成竖版 9:16 4K 高画质爆款封面海报。
     - 智能分析音频提炼多组爆款大字标语。
     - 均匀从剪辑好的视频黄金展示区间（15%~85%）中采集 3 张不同时间点的高清代表帧。
-    - 每一帧作为图生图独立底图（16:9 构图、4K 超清），调用 AI 生成爆款海报。
-    - 若未配置 AI 密钥或生图异常，平滑降级为 16:9 4K 等比高清大字报 SVG（绝不遮挡面部，无伪UI按钮）。
+    - 每一帧作为图生图独立底图（竖版 9:16 构图、4K 超清），调用 AI 生成爆款海报。
+    - 若未配置 AI 密钥或生图异常，平滑降级为 9:16 4K 等比高清大字报 SVG（绝不遮挡面部，无伪UI按钮）。
     """
     target_count = max(1, min(count, 4))
     results: list[CoverResult] = []
