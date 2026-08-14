@@ -4,13 +4,16 @@ import base64
 import concurrent.futures
 import html
 import json
+import logging
 import random
 import re
 import shutil
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from app.config import settings
 from app.models import CoverJobOut, CoverRequest, CoverResult, JobStatus
@@ -19,6 +22,8 @@ from app.services import db as store
 from app.services.ffmpeg_pipeline import probe, run_cmd
 from app.services.openai_client import chat_completions, has_openai_key
 from app.services.secrets import get_secret
+
+logger = logging.getLogger(__name__)
 
 STYLE_HINTS = {
     "yellow-red": "红黄黑高对比爆款配色，粗犷手绘油漆刷痕边缘，米白暖色纸张质感底色",

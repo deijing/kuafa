@@ -332,52 +332,50 @@ class JobManager:
                 best_frames = select_best_cover_frames_from_video(Path(materials[0].path), count=3, out_dir=job_cover_dir) if materials else []
 
             # 2. 启动后台线程并发生成 AI 封面（视频渲染与封面生图 100% 同步并行进行）
-            cover_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            cover_future = cover_pool.submit(
-                generate_video_covers,
-                headline=None if req.mode == "sell" else req.title,
-                job_id=job_id,
-                pre_extracted_frames=best_frames,
-                audio_transcript=audio_sentences,
-                group_name=group_name,
-                count=3,
-                aspect_ratio="9:16",
-                size="1024x1536",
-                quality="high",
-            )
-
-            # 3. 主线程同步执行视频切割、字幕烧录与高画质编码渲染
-            if req.mode == "sell":
-                duration = render_sell_video(
-                    plan,
-                    out_path,
-                    add_subtitles=bool(add_subs),
-                    add_bgm=bool(add_bgm),
-                    bgm_volume=req.bgm_volume,
-                    bgm_file=req.bgm_file,
-                    magic_cues=magic_cues,
-                    speech_speed=speech_speed,
-                    subtitle_position=req.subtitle_position,
-                    video_quality=req.video_quality.value if hasattr(req.video_quality, "value") else str(req.video_quality),
-                    on_progress=on_progress,
-                )
-            else:
-                title = req.title if add_subs else None
-                duration = render_highlight_reel(
-                    plan,
-                    out_path,
-                    title=title,
-                    on_progress=on_progress,
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as cover_pool:
+                cover_future = cover_pool.submit(
+                    generate_video_covers,
+                    headline=None if req.mode == "sell" else req.title,
+                    job_id=job_id,
+                    pre_extracted_frames=best_frames,
+                    audio_transcript=audio_sentences,
+                    group_name=group_name,
+                    count=3,
+                    aspect_ratio="9:16",
+                    size="1024x1536",
+                    quality="high",
                 )
 
-            # 4. 视频渲染完成，收拢并行生成的 AI 封面结果（此时封面已在后台生成完毕，无需额外等待）
-            on_progress(96, "视频合成完成，同步合并高转化 AI 封面…")
-            try:
-                covers = cover_future.result(timeout=90)
-            except Exception:
-                covers = []
-            finally:
-                cover_pool.shutdown(wait=False)
+                # 3. 主线程同步执行视频切割、字幕烧录与高画质编码渲染
+                if req.mode == "sell":
+                    duration = render_sell_video(
+                        plan,
+                        out_path,
+                        add_subtitles=bool(add_subs),
+                        add_bgm=bool(add_bgm),
+                        bgm_volume=req.bgm_volume,
+                        bgm_file=req.bgm_file,
+                        magic_cues=magic_cues,
+                        speech_speed=speech_speed,
+                        subtitle_position=req.subtitle_position,
+                        video_quality=req.video_quality.value if hasattr(req.video_quality, "value") else str(req.video_quality),
+                        on_progress=on_progress,
+                    )
+                else:
+                    title = req.title if add_subs else None
+                    duration = render_highlight_reel(
+                        plan,
+                        out_path,
+                        title=title,
+                        on_progress=on_progress,
+                    )
+
+                # 4. 视频渲染完成，收拢并行生成的 AI 封面结果（此时封面已在后台生成完毕，无需额外等待）
+                on_progress(96, "视频合成完成，同步合并高转化 AI 封面…")
+                try:
+                    covers = cover_future.result(timeout=200)
+                except Exception:
+                    covers = []
 
             final_headline = (covers[0].headline if covers and covers[0].headline else None) or req.title or "爆款带货 极速出片"
 

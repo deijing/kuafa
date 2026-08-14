@@ -235,9 +235,11 @@ export function CoverView() {
 
   useEffect(() => {
     if (!job || (job.status !== "queued" && job.status !== "running")) return
+    let alive = true
     const timer = window.setInterval(() => {
       void fetchCoverJob(job.id)
         .then((next) => {
+          if (!alive) return
           setJob(next)
           if (next.status === "succeeded" || next.status === "failed") {
             setBusy(false)
@@ -260,7 +262,10 @@ export function CoverView() {
           /* keep polling */
         })
     }, 1500)
-    return () => window.clearInterval(timer)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
   }, [job, notify])
 
   const handleExtractAudioHeadlines = async () => {
@@ -457,6 +462,10 @@ export function CoverView() {
   }
 
   async function generate() {
+    if (isUploadingRef || isExtractingFrame) {
+      setError("参考图正在上传或截帧中，请稍候…")
+      return
+    }
     const cleanText = headline.trim()
     if (!cleanText) {
       setError("请填写大字报文案或卖点标语")
@@ -767,7 +776,7 @@ export function CoverView() {
                               ? "bg-purple-100 dark:bg-purple-950/80 text-purple-800 dark:text-purple-300 border-purple-300/80"
                               : "bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border-blue-300/80"
                           )}>
-                            {img.label || (idx === 0 ? "图 1 · 商品实物 / 包装" : (idx === 1 ? "图 2 · 主播人物 / 模特" : `图 ${idx + 1}`))}
+                            {idx === 0 ? "图 1 · 实体商品 / 包装" : idx === 1 ? "图 2 · 主播人物 / 模特" : `图 ${idx + 1} · 补充参考`}
                           </span>
                           <span className="text-[10px] text-slate-400">
                             {img.source === "video_job"
@@ -812,11 +821,18 @@ export function CoverView() {
                   <div className="flex gap-2">
                     <button
                       type="button"
+                      disabled={isUploadingRef}
                       onClick={() => fileInputRef.current?.click()}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border border-dashed border-purple-300 dark:border-purple-800 hover:border-purple-500 bg-purple-50/20 hover:bg-purple-50/50 text-[11px] font-semibold text-purple-700 dark:text-purple-300 cursor-pointer transition-colors"
+                      className={cn(
+                        "flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border border-dashed border-purple-300 dark:border-purple-800 hover:border-purple-500 bg-purple-50/20 hover:bg-purple-50/50 text-[11px] font-semibold text-purple-700 dark:text-purple-300 cursor-pointer transition-colors",
+                        isUploadingRef && "opacity-60 cursor-wait"
+                      )}
                     >
-                      <Plus className="size-3.5" />
-                      {refImages.length === 1 ? "+ 添加第 2 张参考图 (如补充主播人像或商品)" : "+ 添加更多参考图"}
+                      {isUploadingRef ? (
+                        <><Loader2 className="size-3.5 animate-spin" /> 正在上传…</>
+                      ) : (
+                        <><Plus className="size-3.5" /> {refImages.length === 1 ? "+ 添加第 2 张参考图 (如补充主播人像或商品)" : "+ 添加更多参考图"}</>
+                      )}
                     </button>
                   </div>
                 )}

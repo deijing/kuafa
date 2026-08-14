@@ -151,8 +151,11 @@ def wait_for_images(
         time.sleep(poll_seconds)
 
 
-def download_image(url: str, dest) -> None:
-    resp = requests.get(url, timeout=120)
+def download_image(url: str, dest: "Path") -> None:
+    try:
+        resp = requests.get(url, timeout=120)
+    except requests.exceptions.RequestException as e:
+        raise CatsApiError(f"下载封面网络异常: {e}") from e
     if resp.status_code >= 400:
         raise CatsApiError(f"下载封面失败 ({resp.status_code})")
     dest.parent.mkdir(parents=True, exist_ok=True)
