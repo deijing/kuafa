@@ -13,6 +13,7 @@ import {
   ImagePlus,
   Images,
   Loader2,
+  Plus,
   RefreshCw,
   SlidersHorizontal,
   Sparkles,
@@ -53,9 +54,11 @@ import { useMaterials } from "@/hooks/use-materials"
 import { cn } from "@/lib/utils"
 
 type RefImage = {
+  id: string
   url: string
   title: string
   filename: string
+  label?: string
   source: "upload" | "material" | "video_job"
   sourceJobId?: string
   materialId?: string
@@ -65,7 +68,8 @@ type RefImage = {
 
 export function CoverView() {
   const [headline, setHeadline] = useState("")
-  const [refImage, setRefImage] = useState<RefImage | null>(null)
+  const [refImages, setRefImages] = useState<RefImage[]>([])
+  const [extractingIndex, setExtractingIndex] = useState<number | null>(null)
   const [isUploadingRef, setIsUploadingRef] = useState(false)
   const [isExtractingFrame, setIsExtractingFrame] = useState(false)
   const [isExtractingHeadlines, setIsExtractingHeadlines] = useState(false)
@@ -113,26 +117,34 @@ export function CoverView() {
           video_url: state.videoUrl,
         })
           .then((res) => {
-            setRefImage({
-              url: res.url,
-              title: state.title || "成片随机截帧",
-              filename: res.filename,
-              source: "video_job",
-              sourceJobId: state.sourceJobId,
-              videoUrl: state.videoUrl,
-              timestamp: res.timestamp,
-            })
-          })
-          .catch(() => {
-            if (state.refImageUrl) {
-              setRefImage({
-                url: state.refImageUrl,
-                title: state.title || "成片截帧",
-                filename: "video_frame.jpg",
+            setRefImages([
+              {
+                id: `ref_init_${Date.now()}`,
+                url: res.url,
+                title: state.title || "成片画面帧",
+                filename: res.filename,
+                label: "图 1 · 核心画面",
                 source: "video_job",
                 sourceJobId: state.sourceJobId,
                 videoUrl: state.videoUrl,
-              })
+                timestamp: res.timestamp,
+              },
+            ])
+          })
+          .catch(() => {
+            if (state.refImageUrl) {
+              setRefImages([
+                {
+                  id: `ref_init_${Date.now()}`,
+                  url: state.refImageUrl,
+                  title: state.title || "成片截帧",
+                  filename: "video_frame.jpg",
+                  label: "图 1 · 核心画面",
+                  source: "video_job",
+                  sourceJobId: state.sourceJobId,
+                  videoUrl: state.videoUrl,
+                },
+              ])
             }
           })
           .finally(() => {
@@ -160,17 +172,21 @@ export function CoverView() {
             setIsExtractingHeadlines(false)
           })
       } else if (state.refImageUrl) {
-        setRefImage({
-          url: state.refImageUrl,
-          title: state.title || "参考截帧",
-          filename: "video_frame.jpg",
-          source: "material",
-        })
+        setRefImages([
+          {
+            id: `ref_init_${Date.now()}`,
+            url: state.refImageUrl,
+            title: state.title || "参考截帧",
+            filename: "video_frame.jpg",
+            label: "图 1 · 核心画面",
+            source: "material",
+          },
+        ])
       }
 
       notify({
         title: "已载入成片画面",
-        message: `已自动提取「${state.title || "目标成片"}」的视频画面与卖点，可直接一键图生图！`,
+        message: `已自动提取「${state.title || "目标成片"}」的视频画面与卖点，可继续添加实物图或直接图生图！`,
         type: "info",
       })
     }
@@ -179,7 +195,7 @@ export function CoverView() {
   const handleResetCover = useCallback(() => {
     setJob(null)
     setHeadline("")
-    setRefImage(null)
+    setRefImages([])
     setSourceVideoTitle(null)
     setExtractedHeadlines([])
     setSize("1024x1536")
@@ -190,7 +206,7 @@ export function CoverView() {
     setBusy(false)
     notify({
       title: "已新建封面工作台",
-      message: "已重置底图与文案，可上传新图或选择视频即时图生图 (9:16 4K)",
+      message: "已重置参考图与文案，支持上传实体物品与主播人像多图融合生图 (9:16 4K)",
       type: "info",
     })
   }, [notify])
@@ -248,7 +264,8 @@ export function CoverView() {
   }, [job, notify])
 
   const handleExtractAudioHeadlines = async () => {
-    if (!refImage && !sourceVideoTitle) {
+    const firstRef = refImages[0]
+    if (!firstRef && !sourceVideoTitle) {
       notify({
         title: "请先选择视频素材",
         message: "请先从素材库选帧或从成片跳转，以提取视频音频口播文案",
@@ -259,9 +276,9 @@ export function CoverView() {
     setIsExtractingHeadlines(true)
     try {
       const res = await extractCoverHeadlines({
-        job_id: refImage?.sourceJobId,
-        material_id: refImage?.materialId,
-        video_url: refImage?.videoUrl,
+        job_id: firstRef?.sourceJobId,
+        material_id: firstRef?.materialId,
+        video_url: firstRef?.videoUrl,
       })
       if (res.headlines && res.headlines.length > 0) {
         setExtractedHeadlines(res.headlines)
@@ -289,24 +306,31 @@ export function CoverView() {
     }
   }
 
-  const handleRandomizeFrame = async () => {
-    if (!refImage) return
-    setIsExtractingFrame(true)
+  const handleRandomizeFrame = async (idx: number) => {
+    const target = refImages[idx]
+    if (!target) return
+    setExtractingIndex(idx)
     try {
       const res = await extractCoverFrame({
-        job_id: refImage.sourceJobId,
-        material_id: refImage.materialId,
-        video_url: refImage.videoUrl,
+        job_id: target.sourceJobId,
+        material_id: target.materialId,
+        video_url: target.videoUrl,
       })
-      setRefImage({
-        ...refImage,
-        url: res.url,
-        filename: res.filename,
-        timestamp: res.timestamp,
-      })
+      setRefImages((prev) =>
+        prev.map((item, i) =>
+          i === idx
+            ? {
+                ...item,
+                url: res.url,
+                filename: res.filename,
+                timestamp: res.timestamp,
+              }
+            : item
+        )
+      )
       notify({
         title: "已重新截取视频画面",
-        message: `已随机采样视频第 ${res.timestamp}s 画面作为图生图底图`,
+        message: `已随机采样视频第 ${res.timestamp}s 画面作为参考图`,
         type: "success",
       })
     } catch (err) {
@@ -316,25 +340,45 @@ export function CoverView() {
         type: "error",
       })
     } finally {
-      setIsExtractingFrame(false)
+      setExtractingIndex(null)
     }
   }
 
-  async function handleFileUpload(file: File) {
-    if (!file) return
+  const handleRemoveRefImage = (idx: number) => {
+    setRefImages((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  async function handleFileUpload(files: FileList | File[]) {
+    const fileList = Array.from(files)
+    if (fileList.length === 0) return
     setIsUploadingRef(true)
     setError(null)
     try {
-      const res = await uploadCoverReference(file)
-      setRefImage({
-        url: res.url,
-        title: file.name,
-        filename: res.filename,
-        source: "upload",
-      })
+      const newItems: RefImage[] = []
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i]
+        const res = await uploadCoverReference(file)
+        const curCount = refImages.length + newItems.length
+        const defaultLabel =
+          curCount === 0
+            ? "图 1 · 实体商品 / 包装"
+            : curCount === 1
+            ? "图 2 · 主播人物 / 模特"
+            : `图 ${curCount + 1} · 补充参考`
+        newItems.push({
+          id: `ref_upload_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+          url: res.url,
+          title: file.name,
+          filename: res.filename,
+          label: defaultLabel,
+          source: "upload",
+        })
+        if (refImages.length + newItems.length >= 4) break
+      }
+      setRefImages((prev) => [...prev, ...newItems].slice(0, 4))
       notify({
-        title: "参考底图已上传",
-        message: `已导入「${file.name}」，将作为图生图视觉重绘基底`,
+        title: "参考图已上传",
+        message: `已成功导入 ${newItems.length} 张参考图，AI 将在图生图中进行多要素保真融合！`,
         type: "success",
       })
     } catch (err) {
@@ -354,17 +398,27 @@ export function CoverView() {
     setIsExtractingFrame(true)
     try {
       const res = await extractCoverFrame({ material_id: mat.id })
-      setRefImage({
+      const curCount = refImages.length
+      const defaultLabel =
+        curCount === 0
+          ? "图 1 · 实体商品 / 包装"
+          : curCount === 1
+          ? "图 2 · 主播人物 / 模特"
+          : `图 ${curCount + 1} · 补充参考`
+      const newItem: RefImage = {
+        id: `ref_mat_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         url: res.url,
         title: mat.title || mat.filename,
         filename: res.filename,
+        label: defaultLabel,
         source: "material",
         materialId: mat.id,
         timestamp: res.timestamp,
-      })
+      }
+      setRefImages((prev) => [...prev, newItem].slice(0, 4))
       notify({
         title: "已从素材视频截帧",
-        message: `已随机采样素材「${mat.title || mat.filename}」第 ${res.timestamp}s 作为参考底图`,
+        message: `已随机采样素材「${mat.title || mat.filename}」第 ${res.timestamp}s 作为参考图`,
         type: "success",
       })
       // 异步提炼该素材视频的口播大字
@@ -378,13 +432,25 @@ export function CoverView() {
       })
     } catch (err) {
       const targetUrl = mat.thumb_url || `/api/materials/${mat.id}/video`
-      setRefImage({
-        url: targetUrl,
-        title: mat.title || mat.filename,
-        filename: mat.filename,
-        source: "material",
-        materialId: mat.id,
-      })
+      const curCount = refImages.length
+      const defaultLabel =
+        curCount === 0
+          ? "图 1 · 实体商品 / 包装"
+          : curCount === 1
+          ? "图 2 · 主播人物 / 模特"
+          : `图 ${curCount + 1} · 补充参考`
+      setRefImages((prev) => [
+        ...prev,
+        {
+          id: `ref_mat_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          url: targetUrl,
+          title: mat.title || mat.filename,
+          filename: mat.filename,
+          label: defaultLabel,
+          source: "material",
+          materialId: mat.id,
+        },
+      ].slice(0, 4))
     } finally {
       setIsExtractingFrame(false)
     }
@@ -401,12 +467,14 @@ export function CoverView() {
     setSelectedId(null)
     setJob(null)
     try {
+      const isImg2Img = refImages.length > 0
       const created = await createCoverJob({
         headline: cleanText,
         style: "yellow-red" as CoverStyle,
         count,
-        mode: refImage ? "img2img" : "text2img",
-        image_url: refImage ? refImage.url : null,
+        mode: isImg2Img ? "img2img" : "text2img",
+        image_urls: isImg2Img ? refImages.map((r) => r.url) : null,
+        image_url: isImg2Img ? refImages[0].url : null,
         size,
         quality,
         rewrite_prompt: false,
@@ -626,95 +694,145 @@ export function CoverView() {
         </CardHeader>
 
         <CardContent className="flex flex-1 flex-col gap-5 p-7 overflow-y-auto">
-          {/* 1. 参考底图选择与截帧 */}
-          <div className="flex flex-col gap-2">
+          {/* 1. 参考底图选择与截帧（支持多参考图融合：实体商品 + 主播人像） */}
+          <div className="flex flex-col gap-2.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
                 <ImageIcon className="size-3.5 text-purple-500" />
-                01 · 参考底图 (视频帧 / 实拍图)
+                01 · 参考底图 ({refImages.length}/4)
               </span>
-              {materials.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowMaterialPicker(true)}
-                  className="flex items-center gap-1 text-[11px] text-purple-600 hover:text-purple-700 dark:text-purple-400 font-semibold cursor-pointer"
-                >
-                  <Film className="size-3" />
-                  素材库选帧
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {refImages.length < 4 && materials.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowMaterialPicker(true)}
+                    className="flex items-center gap-1 text-[11px] text-purple-600 hover:text-purple-700 dark:text-purple-400 font-semibold cursor-pointer"
+                  >
+                    <Film className="size-3" />
+                    素材库选帧
+                  </button>
+                )}
+                {refImages.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setRefImages([])}
+                    className="text-[11px] text-rose-500 hover:text-rose-600 font-medium cursor-pointer"
+                  >
+                    清空底图
+                  </button>
+                )}
+              </div>
             </div>
 
-            {refImage ? (
-              <div className="flex flex-col gap-2 p-3 rounded-2xl bg-purple-50/40 dark:bg-purple-950/20 border border-purple-200/80 dark:border-purple-900/60 shadow-xs">
-                <div className="flex items-center gap-3">
-                  <div className="relative size-16 rounded-xl overflow-hidden border border-purple-200 dark:border-purple-800 shrink-0 bg-slate-100">
-                    <img
-                      src={refImage.url}
-                      alt={refImage.title}
-                      className="size-full object-cover"
-                    />
-                    {isExtractingFrame && (
-                      <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white">
-                        <Loader2 className="size-4 animate-spin" />
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) void handleFileUpload(e.target.files)
+                e.target.value = ""
+              }}
+            />
+
+            {refImages.length > 0 ? (
+              <div className="flex flex-col gap-2.5">
+                <div className="flex flex-col gap-2">
+                  {refImages.map((img, idx) => (
+                    <div
+                      key={img.id}
+                      className="flex items-center gap-3 p-2.5 rounded-2xl bg-purple-50/40 dark:bg-purple-950/20 border border-purple-200/80 dark:border-purple-900/60 shadow-xs group"
+                    >
+                      <div className="relative size-14 rounded-xl overflow-hidden border border-purple-200 dark:border-purple-800 shrink-0 bg-slate-100">
+                        <img
+                          src={img.url}
+                          alt={img.title}
+                          className="size-full object-cover"
+                        />
+                        {extractingIndex === idx && (
+                          <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white">
+                            <Loader2 className="size-4 animate-spin" />
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-                      {refImage.title}
-                    </p>
-                    <div className="flex items-center gap-1 mt-1.5 flex-wrap">
-                      <span className="inline-flex items-center gap-1 rounded-md bg-purple-100/80 dark:bg-purple-950/80 px-2 py-0.5 text-[10px] font-semibold text-purple-700 dark:text-purple-300 border border-purple-200/60">
-                        <CheckCircle2 className="size-2.5" />
-                        {refImage.source === "video_job"
-                          ? `成片视频截帧${refImage.timestamp ? ` (${refImage.timestamp}s)` : ""}`
-                          : refImage.source === "material"
-                          ? `素材视频截帧${refImage.timestamp ? ` (${refImage.timestamp}s)` : ""}`
-                          : "本地上传原图"}
-                      </span>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className={cn(
+                            "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold border",
+                            idx === 0
+                              ? "bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border-amber-300/80"
+                              : idx === 1
+                              ? "bg-purple-100 dark:bg-purple-950/80 text-purple-800 dark:text-purple-300 border-purple-300/80"
+                              : "bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border-blue-300/80"
+                          )}>
+                            {img.label || (idx === 0 ? "图 1 · 商品实物 / 包装" : (idx === 1 ? "图 2 · 主播人物 / 模特" : `图 ${idx + 1}`))}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            {img.source === "video_job"
+                              ? `成片截帧${img.timestamp ? ` (${img.timestamp}s)` : ""}`
+                              : img.source === "material"
+                              ? `素材截帧${img.timestamp ? ` (${img.timestamp}s)` : ""}`
+                              : "实拍原图"}
+                          </span>
+                        </div>
+                        <p className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate">
+                          {img.title}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        {(img.source === "video_job" || img.source === "material" || img.sourceJobId || img.materialId) && (
+                          <button
+                            type="button"
+                            disabled={extractingIndex === idx}
+                            onClick={() => void handleRandomizeFrame(idx)}
+                            className="p-1.5 rounded-lg text-purple-600 hover:bg-purple-100 dark:hover:bg-purple-900/50 cursor-pointer"
+                            title="换一帧画面"
+                          >
+                            <Dices className="size-3.5" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveRefImage(idx)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 cursor-pointer"
+                          title="移除该参考图"
+                        >
+                          <X className="size-3.5" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex flex-col gap-1 shrink-0">
+                  ))}
+                </div>
+
+                {/* 添加更多参考图按钮 */}
+                {refImages.length < 4 && (
+                  <div className="flex gap-2">
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold cursor-pointer"
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border border-dashed border-purple-300 dark:border-purple-800 hover:border-purple-500 bg-purple-50/20 hover:bg-purple-50/50 text-[11px] font-semibold text-purple-700 dark:text-purple-300 cursor-pointer transition-colors"
                     >
-                      更换
+                      <Plus className="size-3.5" />
+                      {refImages.length === 1 ? "+ 添加第 2 张参考图 (如补充主播人像或商品)" : "+ 添加更多参考图"}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setRefImage(null)}
-                      className="text-[11px] text-rose-500 hover:text-rose-600 font-semibold cursor-pointer"
-                    >
-                      移除
-                    </button>
-                  </div>
-                </div>
-
-                {(refImage.source === "video_job" || refImage.source === "material" || refImage.sourceJobId || refImage.materialId || refImage.videoUrl) && (
-                  <div className="flex items-center justify-between pt-2 border-t border-purple-100 dark:border-purple-900/40">
-                    <span className="text-[10px] text-slate-400">
-                      换个画面？从当前视频中换一帧
-                    </span>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={isExtractingFrame}
-                      onClick={() => void handleRandomizeFrame()}
-                      className="h-6 px-2 text-[10px] font-bold text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800 bg-purple-50/50 hover:bg-purple-100 dark:bg-purple-950/60 dark:hover:bg-purple-900/80 rounded-lg flex items-center gap-1 cursor-pointer"
-                    >
-                      {isExtractingFrame ? (
-                        <Loader2 className="size-2.5 animate-spin" />
-                      ) : (
-                        <Dices className="size-2.5 text-purple-600" />
-                      )}
-                      <span>🎲 随机换一帧</span>
-                    </Button>
                   </div>
                 )}
+
+                {/* 多图融合智能提示 */}
+                <div className="p-2.5 rounded-xl bg-purple-100/50 dark:bg-purple-950/40 border border-purple-200/60 dark:border-purple-900/60 text-[11px] text-purple-800 dark:text-purple-300 leading-relaxed">
+                  {refImages.length >= 2 ? (
+                    <span>
+                      ✨ <strong>多图融合已激活</strong>：AI 将自动融合图 1 与图 2（主播手持/展示实体商品，9:16 4K 海报，人物五官与商品细节严格保真）。
+                    </span>
+                  ) : (
+                    <span>
+                      💡 <strong>提示</strong>：可继续点击上方按钮上传主播人像或商品实物图，开启<strong>多图智能融合</strong>模式。
+                    </span>
+                  )}
+                </div>
               </div>
             ) : (
               <div
@@ -722,21 +840,10 @@ export function CoverView() {
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault()
-                  const file = e.dataTransfer.files[0]
-                  if (file) void handleFileUpload(file)
+                  if (e.dataTransfer.files.length > 0) void handleFileUpload(e.dataTransfer.files)
                 }}
                 className="group relative flex flex-col items-center justify-center p-6 rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-purple-500 bg-slate-50/50 dark:bg-slate-900/50 hover:bg-purple-50/30 transition-all cursor-pointer text-center"
               >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    if (file) void handleFileUpload(file)
-                  }}
-                />
                 {isUploadingRef || isExtractingFrame ? (
                   <div className="flex flex-col items-center gap-2 py-2 text-purple-600">
                     <Loader2 className="size-6 animate-spin" />
@@ -750,10 +857,10 @@ export function CoverView() {
                       <UploadCloud className="size-5" />
                     </div>
                     <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                      点击或拖拽上传实拍底图 / 视频截图
+                      点击或拖拽上传参考图 (支持多选)
                     </p>
                     <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
-                      支持 JPG, PNG, WebP · AI 将根据该帧画面进行图生图保真重绘
+                      支持同时上传<strong>商品实物图</strong>与<strong>主播人像图</strong> · AI 智能多图融合
                     </p>
                   </>
                 )}
@@ -768,7 +875,7 @@ export function CoverView() {
                 <Bookmark className="size-3.5 text-slate-400" />
                 02 · 大字报文案 / 核心卖点
               </span>
-              {(refImage?.source === "video_job" || refImage?.source === "material" || refImage?.sourceJobId || refImage?.materialId || refImage?.videoUrl) && (
+              {(refImages.some((r) => r.source === "video_job" || r.source === "material" || r.sourceJobId || r.materialId || r.videoUrl)) && (
                 <button
                   type="button"
                   disabled={isExtractingHeadlines}

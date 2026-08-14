@@ -152,6 +152,7 @@ export type CoverPayload = {
   count?: number
   mode?: CoverMode
   image_url?: string | null
+  image_urls?: string[] | null
   material_id?: string | null
   size?: CoverSize
   quality?: CoverQuality

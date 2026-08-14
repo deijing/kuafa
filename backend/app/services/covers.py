@@ -332,12 +332,14 @@ def build_live_cover_prompt(
     style: str = "yellow-red",
     index: int = 0,
     aspect_ratio: str = "9:16",
+    multi_ref_count: int = 1,
 ) -> str:
     """
-    电商直播促销海报黄金提示词生成器（支持 16:9 横版与 9:16 竖版 4K 超高清商业画质）：
-    - 参考图规则：仅用于继承整体版式、配色、信息层级和直播带货海报风格，不复制具体人物与文案内容，可根据新主题自由替换产品和卖点，但必须保持同类视觉语言。
+    电商直播促销海报黄金提示词生成器（支持多参考图融合、16:9 横版与 9:16 竖版 4K 超高清商业画质）：
+    - 多参考图规则：当传入多张参考图时（如参考图1为实体物品，参考图2为主播人物），智能将商品与主播融合在同张海报中，主播展示商品，人物五官与商品细节严格保真。
+    - 参考图规则：仅用于继承整体版式、配色、信息层级和直播带货海报风格，不复制原视频杂乱旧字幕，根据新主题自由替换产品和卖点，保持同类视觉语言。
     - 画质要求：4K 超高清分辨率商业广告级摄影画质，细腻光影质感，极高清晰度与真实感。
-    - 构图要求：16:9 横版黄金分割排版（左侧密集促销大字报，右侧主播人物与商品实拍特写），严禁遮挡面部与五官。
+    - 构图要求：竖版 9:16 / 横版 16:9 黄金分割排版，严禁遮挡面部与五官。
     - 负面排除：错字乱码、文字缺失、标签裁切、额外人物或手机、品牌标志、肢体畸形、多余手指、面部变形、模糊、过曝、过饱和、杂乱背景、矢量化人物、塑料皮肤、低清晰度、遮挡面部、脸部被遮挡、居中大白框、手机UI、播放控件、底部小黄车按钮、视频字幕条。
     """
     tokens = _parse_prompt_tokens(headline, group_name, index)
@@ -348,12 +350,22 @@ def build_live_cover_prompt(
     tags = tokens["tags"]
     style_desc = STYLE_HINTS.get(style, STYLE_HINTS["yellow-red"])
 
-    ref_rule = (
-        "【参考图核心规则】：参考图仅用于继承整体版式、配色、信息层级和直播带货海报风格，"
-        "不复制原视频中的具体人物与杂乱文案内容，可根据新主题自由替换产品和卖点，但必须保持同类视觉语言。\n\n"
-        if is_img2img
-        else ""
-    )
+    if multi_ref_count >= 2:
+        ref_rule = (
+            f"【多参考图智能融合核心规则】：本次生成任务提供了 {multi_ref_count} 张关键视觉参考图。\n"
+            "- 【参考图1】：为需要展示的核心商品实体/包装实物；\n"
+            "- 【参考图2】：为主播人物面部五官特写与发型服装；\n"
+            "- 【融合呈现要求】：请将参考图中的主播人物与商品实物在竖版 9:16 4K 海报中完美融合！"
+            "年轻主播自然手持或身侧展示该商品，真实还原参考图1中商品的包装与实体材质细节，"
+            "同时严格保真参考图2中主播的五官样貌（面部明亮通透无任何遮挡）。\n\n"
+        )
+    elif is_img2img:
+        ref_rule = (
+            "【参考图核心规则】：参考图仅用于继承整体版式、配色、信息层级和直播带货海报风格，"
+            "不复制原视频中的具体人物与杂乱文案内容，可根据新主题自由替换产品和卖点，但必须保持同类视觉语言。\n\n"
+        )
+    else:
+        ref_rule = ""
 
     tags_str = "」「".join(tags)
 
@@ -507,20 +519,20 @@ class CoverJobManager:
         ).start()
         return job
 
-    def _build_prompt(self, req: CoverRequest, index: int) -> str:
-        ratio = "16:9" if req.size in ("1792x1024", "1536x1024", "1920x1080") or not req.size else ("9:16" if req.size == "1024x1536" else "16:9")
+    def _build_prompt(self, req: CoverRequest, index: int, multi_ref_count: int = 1) -> str:
+        ratio = "9:16" if req.size == "1024x1536" else ("16:9" if req.size in ("1792x1024", "1536x1024", "1920x1080") else "9:16")
         return build_live_cover_prompt(
             headline=req.headline,
             is_img2img=(req.mode == "img2img"),
             style=req.style,
             index=index,
             aspect_ratio=ratio,
+            multi_ref_count=multi_ref_count,
         )
 
-    def _resolve_image_targets(self, image_url: str | None, count: int, out_dir: Path) -> tuple[list[Path], list[str | None]]:
-        """解析参考图。若为视频，抽取 count 张不同的代表帧；若为单图，返回复制单图。"""
+    def _resolve_single_image(self, image_url: str | None, out_dir: Path) -> tuple[Path | None, str | None]:
         if not image_url:
-            return [], []
+            return None, None
         try:
             target_path: Path | None = None
             if image_url.startswith("/api/media/covers/references/"):
@@ -536,7 +548,6 @@ class CoverJobManager:
                 fname = image_url.split("/")[-1]
                 target_path = resolve_media_path(settings.outputs_dir, fname)
             elif image_url.startswith("/api/materials/"):
-                # 前端视频地址格式：/api/materials/{id}/video
                 parts = image_url.split("/")
                 if len(parts) >= 5 and parts[4] == "video":
                     mat = store.get_material(parts[3])
@@ -544,23 +555,41 @@ class CoverJobManager:
                         target_path = Path(mat.path)
 
             if target_path and target_path.exists():
-                # 若提供的是视频文件，自动抽取 count 帧代表帧
                 if target_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".avi", ".flv", ".webm", ".ts"):
                     ref_dir = out_dir / "references"
-                    frames = extract_multiple_video_frames(target_path, count=count, out_dir=ref_dir)
-                    b64_list = [_image_to_base64(f) for f in frames]
-                    return frames, b64_list
-
-                # 单张图片文件
+                    frames = select_best_cover_frames_from_video(target_path, count=1, out_dir=ref_dir)
+                    if frames:
+                        return frames[0], _image_to_base64(frames[0])
                 b64 = _image_to_base64(target_path)
-                return [target_path] * count, [b64] * count
+                return target_path, b64
         except Exception:
             pass
-        return [], []
+        return None, None
+
+    def _resolve_all_references(self, req: CoverRequest, out_dir: Path) -> tuple[list[Path], list[str]]:
+        """解析所有参考图（支持单张/多张：如实体物品+主播人像）。"""
+        paths: list[Path] = []
+        b64s: list[str] = []
+
+        # 优先解析 image_urls 列表
+        target_urls = req.image_urls if req.image_urls and len(req.image_urls) > 0 else ([req.image_url] if req.image_url else [])
+        for url in target_urls:
+            p, b = self._resolve_single_image(url, out_dir)
+            if p and b:
+                paths.append(p)
+                b64s.append(b)
+
+        # 兼容直传的 image_base64s
+        if req.image_base64s:
+            for b_str in req.image_base64s:
+                if b_str and b_str not in b64s:
+                    b64s.append(b_str)
+
+        return paths, b64s
 
     def _run(self, job_id: str, req: CoverRequest) -> None:
         try:
-            mode_desc = "AI 图生图" if req.mode == "img2img" else "AI 文生图"
+            mode_desc = "AI 多图融合图生图" if (req.image_urls and len(req.image_urls) > 1) else ("AI 图生图" if req.mode == "img2img" else "AI 文生图")
             self._update(
                 job_id,
                 status=JobStatus.running,
@@ -572,51 +601,60 @@ class CoverJobManager:
             out_dir = settings.covers_dir / job_id
             out_dir.mkdir(parents=True, exist_ok=True)
 
-            ref_files, img_b64s = self._resolve_image_targets(req.image_url, total, out_dir) if req.mode == "img2img" else ([], [])
+            ref_paths, all_b64s = self._resolve_all_references(req, out_dir) if req.mode == "img2img" else ([], [])
+            multi_ref_count = len(all_b64s)
 
             def _generate_item(i: int) -> CoverResult:
+                # 适度微交错错峰
+                if i > 0:
+                    time.sleep(i * 0.4)
+
                 with _IMAGE_GEN_SEMAPHORE:
-                    item_ref_file = ref_files[i % len(ref_files)] if ref_files else None
-                    item_b64 = img_b64s[i % len(img_b64s)] if img_b64s else None
-                    try:
-                        prompt = self._build_prompt(req, i)
-                        task_id = catsapi.create_image_task(
-                            prompt,
-                            image_url=req.image_url if (req.mode == "img2img" and req.image_url and req.image_url.startswith("http")) else None,
-                            image_base64=item_b64,
-                            size=req.size,
-                            quality=req.quality,
-                            rewrite_prompt=req.rewrite_prompt,
-                        )
-                        urls = catsapi.wait_for_images(task_id, timeout_seconds=90)
-                        url = urls[0]
-                        ext = catsapi.guess_ext(url)
-                        filename = f"cover_{i + 1:02d}{ext}"
-                        dest = out_dir / filename
-                        catsapi.download_image(url, dest)
-                        return CoverResult(
-                            id=f"{job_id}-{i + 1}",
-                            url=f"/api/media/covers/{job_id}/{filename}",
-                            remote_url=url,
-                            headline=req.headline.strip(),
-                        )
-                    except Exception:
-                        # 单张失败兜底生成优雅大字报 SVG（保证用户批量完整交付且不遮挡人脸）
-                        svg_name = f"cover_{i + 1:02d}.svg"
-                        svg_dest = out_dir / svg_name
-                        svg_content = _build_svg_cover(
-                            req.headline.strip(),
-                            index=i,
-                            frame_jpeg_path=item_ref_file,
-                            style=req.style,
-                        )
-                        svg_dest.write_text(svg_content, encoding="utf-8")
-                        return CoverResult(
-                            id=f"{job_id}-{i + 1}",
-                            url=f"/api/media/covers/{job_id}/{svg_name}",
-                            remote_url=None,
-                            headline=req.headline.strip(),
-                        )
+                    for attempt in range(2):
+                        try:
+                            prompt = self._build_prompt(req, i, multi_ref_count=multi_ref_count)
+                            task_id = catsapi.create_image_task(
+                                prompt,
+                                input_images=all_b64s if all_b64s else None,
+                                image_base64=all_b64s[0] if (all_b64s and len(all_b64s) == 1) else None,
+                                size=req.size or "1024x1536",
+                                quality=req.quality or "high",
+                                rewrite_prompt=req.rewrite_prompt,
+                            )
+                            urls = catsapi.wait_for_images(task_id, timeout_seconds=180)
+                            url = urls[0]
+                            ext = catsapi.guess_ext(url)
+                            filename = f"cover_{i + 1:02d}{ext}"
+                            dest = out_dir / filename
+                            catsapi.download_image(url, dest)
+                            return CoverResult(
+                                id=f"{job_id}-{i + 1}",
+                                url=f"/api/media/covers/{job_id}/{filename}",
+                                remote_url=url,
+                                headline=req.headline.strip(),
+                            )
+                        except Exception as exc:
+                            logger.warning("CoverJobManager单张生成尝试%d失败: %s", attempt + 1, exc)
+                            time.sleep(2.0)
+
+                    # 兜底生成大字报 SVG（保证用户批量完整交付且不遮挡人脸）
+                    svg_name = f"cover_{i + 1:02d}.svg"
+                    svg_dest = out_dir / svg_name
+                    item_frame = ref_paths[0] if ref_paths else None
+                    svg_content = _build_svg_cover(
+                        req.headline.strip(),
+                        index=i,
+                        frame_jpeg_path=item_frame,
+                        style=req.style,
+                        aspect_ratio="9:16" if req.size == "1024x1536" else "16:9",
+                    )
+                    svg_dest.write_text(svg_content, encoding="utf-8")
+                    return CoverResult(
+                        id=f"{job_id}-{i + 1}",
+                        url=f"/api/media/covers/{job_id}/{svg_name}",
+                        remote_url=None,
+                        headline=req.headline.strip(),
+                    )
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=total) as pool:
                 futures = [pool.submit(_generate_item, i) for i in range(total)]

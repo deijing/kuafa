@@ -52,26 +52,33 @@ def create_image_task(
         "size": size or settings.cover_size,
     }
 
-    # 确定参考图：CatsAPI gptImage2 图生图模型要求将参考图放入 params["imagePrompt"]
+    # 确定参考图：CatsAPI gptImage2 图生图模型支持多参考图（主播人像 + 商品实物融合）
     primary_image: str | None = None
     all_images: list[str] = []
 
     if image_base64:
-        # 兼容带前缀或纯 base64
         data_uri = image_base64 if image_base64.startswith("data:") else f"data:image/jpeg;base64,{image_base64}"
         primary_image = data_uri
         all_images.append(_strip_data_uri(image_base64))
-    elif input_images:
+
+    if input_images:
         for img in input_images:
-            all_images.append(_strip_data_uri(img))
-        if input_images:
-            primary_image = input_images[0]
+            clean = _strip_data_uri(img)
+            if clean and clean not in all_images:
+                all_images.append(clean)
+        if not primary_image and input_images:
+            first = input_images[0]
+            primary_image = first if first.startswith("data:") else f"data:image/jpeg;base64,{first}"
+
     elif image_url and image_url.startswith("http"):
         primary_image = image_url
-        all_images.append(image_url)
+        if image_url not in all_images:
+            all_images.append(image_url)
 
     if primary_image:
         params["imagePrompt"] = primary_image
+    if len(all_images) > 1:
+        params["referenceImages"] = all_images
 
     payload: dict[str, Any] = {
         "model": settings.catsapi_model,

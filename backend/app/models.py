@@ -143,6 +143,8 @@ class CoverRequest(BaseModel):
     count: int = Field(default=3, ge=1, le=4)
     mode: Literal["text2img", "img2img", "ai"] = "text2img"
     image_url: str | None = None
+    image_urls: list[str] | None = None
+    image_base64s: list[str] | None = None
     material_id: str | None = None
     size: str = "1024x1536"
     quality: str = "high"
