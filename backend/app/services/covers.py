@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures
-import html
 import json
 import logging
 import random
@@ -642,30 +641,15 @@ class CoverJobManager:
                             logger.warning("CoverJobManager单张生成尝试%d失败: %s", attempt + 1, exc)
                             time.sleep(2.0)
 
-                    # 兜底生成大字报 SVG（保证用户批量完整交付且不遮挡人脸）
-                    svg_name = f"cover_{i + 1:02d}.svg"
-                    svg_dest = out_dir / svg_name
-                    item_frame = ref_paths[0] if ref_paths else None
-                    svg_content = _build_svg_cover(
-                        req.headline.strip(),
-                        index=i,
-                        frame_jpeg_path=item_frame,
-                        style=req.style,
-                        aspect_ratio="9:16" if req.size == "1024x1536" else "16:9",
-                    )
-                    svg_dest.write_text(svg_content, encoding="utf-8")
-                    return CoverResult(
-                        id=f"{job_id}-{i + 1}",
-                        url=f"/api/media/covers/{job_id}/{svg_name}",
-                        remote_url=None,
-                        headline=req.headline.strip(),
-                    )
+                    # 两次重试均失败，返回 None（不使用 SVG 兜底）
+                    return None
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=total) as pool:
                 futures = [pool.submit(_generate_item, i) for i in range(total)]
                 for idx, fut in enumerate(futures):
                     res = fut.result()
-                    results.append(res)
+                    if res is not None:
+                        results.append(res)
                     pct = 10 + int(80 * (idx + 1) / total)
                     self._update(
                         job_id,
@@ -693,235 +677,6 @@ class CoverJobManager:
 
 
 cover_jobs = CoverJobManager()
-
-
-def _build_svg_cover(
-    text: str,
-    index: int = 0,
-    frame_jpeg_path: Path | None = None,
-    group_name: str | None = None,
-    style: str = "yellow-red",
-    aspect_ratio: str = "9:16",
-) -> str:
-    """
-    生成高转化大字报海报（支持 16:9 横版与 9:16 竖版 4K 画质，绝不遮挡人物面部与五官）。
-    """
-    tokens = _parse_prompt_tokens(text, group_name, index)
-    lead_tag = tokens["lead_tag"]
-    prod_name = tokens["prod_name"]
-    price_display = tokens["price_display"]
-    core_point = tokens["core_point"]
-    tags = tokens["tags"]
-
-    text_clean = text.strip() or "爆款热销好物"
-
-    if style == "black-yellow":
-        bg_fill = "#09090B"
-        title_color = "#FACC15"
-        chip_bg = "#EAB308"
-        chip_text = "#09090B"
-    elif style == "red-white":
-        bg_fill = "#DC2626"
-        title_color = "#FFFFFF"
-        chip_bg = "#FEF08A"
-        chip_text = "#991B1B"
-    elif style == "neon-cyber":
-        bg_fill = "#050814"
-        title_color = "#22D3EE"
-        chip_bg = "#EC4899"
-        chip_text = "#FFFFFF"
-    elif style == "clean-minimal":
-        bg_fill = "#F8FAFC"
-        title_color = "#0F172A"
-        chip_bg = "#E2E8F0"
-        chip_text = "#0F172A"
-    elif style == "festive-gold":
-        bg_fill = "#991B1B"
-        title_color = "#FDE047"
-        chip_bg = "#D97706"
-        chip_text = "#FFFFFF"
-    else:  # yellow-red 爆款
-        bg_fill = "#991B1B"
-        title_color = "#FACC15"
-        chip_bg = "#DC2626"
-        chip_text = "#FFFFFF"
-
-    # 16:9 横版排版（1920x1080 4K等比高清布局）
-    if aspect_ratio == "16:9":
-        chunk_size = 9
-        lines = [text_clean[i : i + chunk_size] for i in range(0, min(len(text_clean), 18), chunk_size)]
-        if not lines:
-            lines = ["爆款热销好物"]
-
-        img_bg_element = ""
-        if frame_jpeg_path and frame_jpeg_path.exists():
-            try:
-                b64_data = base64.b64encode(frame_jpeg_path.read_bytes()).decode("utf-8")
-                img_bg_element = f'<image href="data:image/jpeg;base64,{b64_data}" width="1920" height="1080" preserveAspectRatio="xMidYMid slice"/>'
-            except Exception:
-                img_bg_element = ""
-
-        title_y_start = 280 if len(lines) > 1 else 320
-        line_h = 110
-        tspan_list = []
-        for i, ln in enumerate(lines[:2]):
-            escaped_ln = html.escape(ln)
-            y = title_y_start + i * line_h
-            tspan_list.append(
-                f'<text x="80" y="{y}" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Impact, sans-serif" font-size="92" font-weight="900" text-anchor="start" fill="{title_color}" stroke="#000000" stroke-width="16" paint-order="stroke fill">{escaped_ln}</text>'
-                f'<text x="80" y="{y}" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Impact, sans-serif" font-size="92" font-weight="900" text-anchor="start" fill="{title_color}">{escaped_ln}</text>'
-            )
-        tspan_str = "\n    ".join(tspan_list)
-
-        tag_elements = []
-        tag_xs = [80, 360, 640]
-        for idx, tg in enumerate(tags[:3]):
-            x = tag_xs[idx]
-            tag_elements.append(
-                f'<g>'
-                f'<rect x="{x}" y="570" width="250" height="58" rx="29" fill="#FFFFFF" fill-opacity="0.96" stroke="#1F2937" stroke-width="3"/>'
-                f'<text x="{x + 125}" y="608" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="26" font-weight="800" text-anchor="middle" fill="#111827">{html.escape(tg)}</text>'
-                f'</g>'
-            )
-        tags_svg = "\n    ".join(tag_elements)
-
-        return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
-  <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="{bg_fill}" stop-opacity="1"/>
-      <stop offset="100%" stop-color="#111827" stop-opacity="1"/>
-    </linearGradient>
-    <linearGradient id="leftVignette" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#000000" stop-opacity="0.92"/>
-      <stop offset="45%" stop-color="#000000" stop-opacity="0.75"/>
-      <stop offset="70%" stop-color="#000000" stop-opacity="0.2"/>
-      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
-    </linearGradient>
-    <filter id="glow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.75"/>
-    </filter>
-  </defs>
-
-  <!-- 1. 底色或视频代表帧画面（铺满 16:9） -->
-  <rect width="1920" height="1080" fill="url(#bgGrad)"/>
-  {img_bg_element}
-
-  <!-- 2. 左半部暗渐变层：确保大字高对比吸睛，右半部人物与商品完全通透露出 -->
-  <rect width="1280" height="1080" fill="url(#leftVignette)"/>
-
-  <!-- 3. 左上方引流短句刷痕徽章 -->
-  <g filter="url(#glow)">
-    <rect x="80" y="70" width="260" height="66" rx="14" fill="{chip_bg}"/>
-    <text x="210" y="114" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="28" font-weight="900" text-anchor="middle" fill="{chip_text}">{html.escape(lead_tag)}</text>
-  </g>
-
-  <!-- 4. 商品品类提示 -->
-  <g filter="url(#glow)">
-    <rect x="370" y="70" width="280" height="66" rx="33" fill="#000000" fill-opacity="0.65" stroke="#FDE047" stroke-width="2"/>
-    <text x="510" y="112" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="26" font-weight="700" text-anchor="middle" fill="#FEF08A">✨ {html.escape(prod_name)}</text>
-  </g>
-
-  <!-- 5. 左侧大字报文案 -->
-  <g filter="url(#glow)">
-    {tspan_str}
-  </g>
-
-  <!-- 6. 核心卖点手刷色块条 -->
-  <g filter="url(#glow)">
-    <rect x="80" y="470" width="840" height="68" rx="34" fill="#FEF08A" stroke="#EAB308" stroke-width="3"/>
-    <text x="500" y="514" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="32" font-weight="900" text-anchor="middle" fill="#991B1B">💥 {html.escape(core_point)}</text>
-  </g>
-
-  <!-- 7. 白底黑框圆角卖点标签 -->
-  <g filter="url(#glow)">
-    {tags_svg}
-  </g>
-</svg>"""
-
-    # 9:16 竖版排版
-    chunk_size = 7
-    lines = [text_clean[i : i + chunk_size] for i in range(0, min(len(text_clean), 14), chunk_size)]
-    if not lines:
-        lines = ["爆款热销好物"]
-
-    img_bg_element = ""
-    if frame_jpeg_path and frame_jpeg_path.exists():
-        try:
-            b64_data = base64.b64encode(frame_jpeg_path.read_bytes()).decode("utf-8")
-            img_bg_element = f'<image href="data:image/jpeg;base64,{b64_data}" width="1080" height="1920" preserveAspectRatio="xMidYMid slice"/>'
-        except Exception:
-            img_bg_element = ""
-
-    title_y_start = 220 if len(lines) > 1 else 250
-    line_h = 100
-    tspan_list = []
-    for i, ln in enumerate(lines[:2]):
-        escaped_ln = html.escape(ln)
-        y = title_y_start + i * line_h
-        tspan_list.append(
-            f'<text x="540" y="{y}" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Impact, sans-serif" font-size="82" font-weight="900" text-anchor="middle" fill="{title_color}" stroke="#000000" stroke-width="14" paint-order="stroke fill">{escaped_ln}</text>'
-            f'<text x="540" y="{y}" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Impact, sans-serif" font-size="82" font-weight="900" text-anchor="middle" fill="{title_color}">{escaped_ln}</text>'
-        )
-
-    tspan_str = "\n    ".join(tspan_list)
-
-    tag_elements = []
-    tag_xs = [140, 430, 720]
-    for idx, tg in enumerate(tags[:3]):
-        x = tag_xs[idx]
-        tag_elements.append(
-            f'<g>'
-            f'<rect x="{x}" y="420" width="220" height="54" rx="27" fill="#FFFFFF" fill-opacity="0.95" stroke="#1F2937" stroke-width="3"/>'
-            f'<text x="{x + 110}" y="456" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="24" font-weight="800" text-anchor="middle" fill="#111827">{html.escape(tg)}</text>'
-            f'</g>'
-        )
-    tags_svg = "\n    ".join(tag_elements)
-
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" width="1080" height="1920">
-  <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="{bg_fill}" stop-opacity="1"/>
-      <stop offset="100%" stop-color="#111827" stop-opacity="1"/>
-    </linearGradient>
-    <linearGradient id="topVignette" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#000000" stop-opacity="0.85"/>
-      <stop offset="35%" stop-color="#000000" stop-opacity="0.65"/>
-      <stop offset="60%" stop-color="#000000" stop-opacity="0.15"/>
-      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
-    </linearGradient>
-    <filter id="glow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.75"/>
-    </filter>
-  </defs>
-
-  <rect width="1080" height="1920" fill="url(#bgGrad)"/>
-  {img_bg_element}
-
-  <rect width="1080" height="850" fill="url(#topVignette)"/>
-
-  <g filter="url(#glow)">
-    <rect x="54" y="64" width="270" height="66" rx="14" fill="{chip_bg}"/>
-    <text x="189" y="108" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="28" font-weight="900" text-anchor="middle" fill="{chip_text}">{html.escape(lead_tag)}</text>
-  </g>
-
-  <g filter="url(#glow)">
-    <rect x="740" y="64" width="286" height="66" rx="33" fill="#000000" fill-opacity="0.6" stroke="#FDE047" stroke-width="2"/>
-    <text x="883" y="106" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="26" font-weight="700" text-anchor="middle" fill="#FEF08A">✨ {html.escape(prod_name)}</text>
-  </g>
-
-  <g filter="url(#glow)">
-    {tspan_str}
-  </g>
-
-  <g filter="url(#glow)">
-    <rect x="100" y="340" width="880" height="62" rx="31" fill="#FEF08A" stroke="#EAB308" stroke-width="3"/>
-    <text x="540" y="382" font-family="Hiragino Sans GB, Microsoft YaHei, sans-serif" font-size="30" font-weight="900" text-anchor="middle" fill="#991B1B">💥 {html.escape(core_point)}</text>
-  </g>
-
-  <g filter="url(#glow)">
-    {tags_svg}
-  </g>
-</svg>"""
 
 
 def extract_audio_headlines(
@@ -1043,7 +798,7 @@ def generate_video_covers(
     - 支持混剪期提前精选美学高光关键帧并同步并行生图。
     - 智能分析音频提炼多组爆款大字标语。
     - 每一帧作为图生图独立底图（竖版 9:16 构图、4K 超清），调用 AI 生成爆款海报。
-    - 若未配置 AI 密钥或生图异常，平滑降级为 9:16 4K 等比高清大字报 SVG（绝不遮挡面部，无伪UI按钮）。
+    - 若未配置 AI 密钥或生图失败，跳过该张封面（不使用 SVG 兜底）。
     """
     target_count = max(1, min(count, 4))
     results: list[CoverResult] = []
@@ -1124,30 +879,5 @@ def generate_video_covers(
                 if res:
                     results.append(res)
 
-    # 4. 若无 AI 密钥或 AI 接口异常，关联真实成片截帧与音频文案的高清 16:9 4K 大字报海报
-    if len(results) < target_count:
-        start_idx = len(results)
-        for i in range(start_idx, target_count):
-            cur_text = headlines[i]
-            filename = f"cover_{i + 1:02d}.svg"
-            dest = out_dir / filename
-            frame_img = extracted_frames[i % len(extracted_frames)] if extracted_frames else None
-            svg_content = _build_svg_cover(
-                cur_text,
-                index=i,
-                frame_jpeg_path=frame_img,
-                group_name=group_name,
-                style=style,
-                aspect_ratio=aspect_ratio,
-            )
-            dest.write_text(svg_content, encoding="utf-8")
-            results.append(
-                CoverResult(
-                    id=f"{job_id}-{i + 1}",
-                    url=f"/api/media/covers/{job_id}/{filename}",
-                    remote_url=None,
-                    headline=cur_text,
-                )
-            )
-
     return results[:target_count]
+
