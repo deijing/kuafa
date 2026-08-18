@@ -7,7 +7,6 @@ import {
   History,
   Info,
   Loader2,
-  Music,
   Plus,
   ShieldAlert,
   SlidersHorizontal,
@@ -38,6 +37,7 @@ import { useNotifications } from "@/hooks/use-notifications"
 import { useJobs } from "@/hooks/use-jobs"
 import {
   createGenerateJob,
+  fetchBgmFiles,
   fetchJob,
   fetchJobs,
   uploadBgm,
@@ -99,8 +99,23 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
   const [addBgm, setAddBgm] = useState(true)
   const [bgmVolume, setBgmVolume] = useState<number>(25)
   const [customBgm, setCustomBgm] = useState<BgmItem | null>(null)
+  const [bgmLibraryList, setBgmLibraryList] = useState<BgmItem[]>([])
+  const [selectedBgmMode, setSelectedBgmMode] = useState<string>("auto")
   const [uploadingBgm, setUploadingBgm] = useState(false)
   const bgmFileInputRef = useRef<HTMLInputElement>(null)
+
+  const loadBgmLibrary = useCallback(async () => {
+    try {
+      const list = await fetchBgmFiles()
+      setBgmLibraryList(list)
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadBgmLibrary()
+  }, [loadBgmLibrary])
 
   const [clipsPerVideo, setClipsPerVideo] = useState<number | null>(5)
   const [shuffleClips, setShuffleClips] = useState<boolean>(true)
@@ -150,7 +165,6 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
     userClearedRef.current = true
     setJob(null)
     setError(null)
-    setSelectedJobId(null)
     setVideoQuality("1080p")
     notify({
       title: "已新建生成页面",
@@ -252,6 +266,13 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
     try {
       const uploaded = await uploadBgm(file)
       setCustomBgm(uploaded)
+      setSelectedBgmMode(uploaded.filename)
+      void loadBgmLibrary()
+      notify({
+        title: "BGM 上传成功",
+        message: `「${uploaded.title || uploaded.filename}」已添加至背景音乐库并选中！`,
+        type: "success",
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : "上传音频失败")
     } finally {
@@ -272,6 +293,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
       const baseTitle = activeGroup
         ? `${activeGroup.name} · 带货成片`
         : "限时特惠 · 爆款精选成片"
+      const bgmTarget = customBgm ? customBgm.filename : (selectedBgmMode === "auto" ? "auto" : selectedBgmMode)
 
       if (countNum === 1) {
         const created = await createGenerateJob({
@@ -288,7 +310,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
           add_subtitles: addSubtitles,
           add_bgm: addBgm,
           bgm_volume: bgmVolume,
-          bgm_file: customBgm ? customBgm.filename : null,
+          bgm_file: bgmTarget,
           mode: "sell",
           extract_rules: rules,
           negative_words: negativeWords,
@@ -317,7 +339,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
               add_subtitles: addSubtitles,
               add_bgm: addBgm,
               bgm_volume: bgmVolume,
-              bgm_file: customBgm ? customBgm.filename : null,
+              bgm_file: bgmTarget,
               mode: "sell",
               extract_rules: rules,
               negative_words: negativeWords,
@@ -884,7 +906,13 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                         背景音乐
                       </span>
                       <span className="text-[13px] text-[#9CA3AF] dark:text-slate-400">
-                        {customBgm ? `音频: ${customBgm.filename}` : "自动匹配热度 BGM 或自定义音频"}
+                        {customBgm
+                          ? `已选音频: ${customBgm.title || customBgm.filename}`
+                          : selectedBgmMode === "auto"
+                          ? bgmLibraryList.length > 0
+                            ? `自动匹配 (已载入 ${bgmLibraryList.length} 首音乐)`
+                            : "默认无内置音乐 (可点击下方上传)"
+                          : `已选: ${selectedBgmMode}`}
                       </span>
                     </div>
                     <Switch checked={addBgm} onCheckedChange={setAddBgm} />
@@ -892,6 +920,52 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
 
                   {addBgm ? (
                     <div className="flex flex-col gap-3 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 p-3 transition-all">
+                      {/* BGM Source Selection Dropdown */}
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-medium text-slate-700 dark:text-slate-300">
+                            音乐选择
+                          </span>
+                          <span className="text-[10px] font-mono text-blue-600 dark:text-blue-400">
+                            音乐库: {bgmLibraryList.length} 首
+                          </span>
+                        </div>
+                        <Select
+                          value={customBgm ? customBgm.filename : selectedBgmMode}
+                          onValueChange={(val) => {
+                            if (val === "auto") {
+                              setCustomBgm(null)
+                              setSelectedBgmMode("auto")
+                            } else {
+                              const found = bgmLibraryList.find((b) => b.filename === val)
+                              if (found) {
+                                setCustomBgm(found)
+                                setSelectedBgmMode(val)
+                              } else {
+                                setSelectedBgmMode(val)
+                              }
+                            }
+                          }}
+                          disabled={busy}
+                        >
+                          <SelectTrigger className="w-full text-xs h-9 rounded-xl border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200">
+                            <SelectValue placeholder="选择背景音乐" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="auto">
+                              {bgmLibraryList.length > 0
+                                ? `全自动轮播匹配 (从音乐库 ${bgmLibraryList.length} 首歌曲中轮换)`
+                                : "全自动匹配 (音乐库暂为空，请点击下方上传)"}
+                            </SelectItem>
+                            {bgmLibraryList.map((bgm) => (
+                              <SelectItem key={bgm.filename} value={bgm.filename}>
+                                {bgm.title || bgm.filename} ({bgm.duration_label || "--:--"})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
                       {/* BGM Upload / Custom File Badge */}
                       <div className="flex items-center justify-between gap-2">
                         <input
@@ -906,50 +980,31 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                           }}
                         />
 
-                        {customBgm ? (
-                          <div className="flex min-w-0 flex-1 items-center justify-between rounded-lg border border-blue-200/80 bg-blue-50/80 px-2.5 py-1.5 dark:border-blue-900/60 dark:bg-blue-950/40">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <Music className="size-3.5 shrink-0 text-blue-600 dark:text-blue-400" />
-                              <span className="truncate text-xs font-medium text-blue-700 dark:text-blue-300">
-                                {customBgm.filename}
-                              </span>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => setCustomBgm(null)}
-                              className="ml-1 rounded p-0.5 text-slate-400 hover:bg-blue-100 hover:text-slate-600 cursor-pointer dark:hover:bg-blue-900"
-                              title="移除自定义音乐"
-                            >
-                              <X className="size-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={uploadingBgm}
-                            onClick={() => bgmFileInputRef.current?.click()}
-                            className="w-full h-8 text-xs font-medium border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[#4B5563] dark:text-slate-200 hover:border-blue-500 hover:text-blue-600 cursor-pointer shadow-2xs"
-                          >
-                            {uploadingBgm ? (
-                              <Loader2 className="mr-1.5 size-3.5 animate-spin text-blue-600" />
-                            ) : (
-                              <Upload className="mr-1.5 size-3.5 text-blue-600" />
-                            )}
-                            {uploadingBgm ? "上传中…" : "上传自定义 BGM"}
-                          </Button>
-                        )}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={uploadingBgm || busy}
+                          onClick={() => bgmFileInputRef.current?.click()}
+                          className="w-full h-8 text-xs font-medium border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[#4B5563] dark:text-slate-200 hover:border-blue-500 hover:text-blue-600 cursor-pointer shadow-2xs gap-1.5"
+                        >
+                          {uploadingBgm ? (
+                            <Loader2 className="size-3.5 animate-spin text-blue-600" />
+                          ) : (
+                            <Upload className="size-3.5 text-blue-600" />
+                          )}
+                          {uploadingBgm ? "上传中…" : "上传新音乐至音乐库"}
+                        </Button>
                       </div>
 
                       {/* Stepless Volume Control Slider */}
-                      <div className="flex flex-col gap-1.5">
+                      <div className="flex flex-col gap-1.5 pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
                         <div className="flex items-center justify-between text-xs">
                           <span className="flex items-center gap-1.5 font-medium text-[#4B5563] dark:text-slate-300">
                             <Volume2 className="size-3.5 text-slate-400" />
                             音乐音量 (无极调节)
                           </span>
-                  <span className="font-bold font-mono text-blue-600 dark:text-blue-400">
+                          <span className="font-bold font-mono text-blue-600 dark:text-blue-400">
                             {bgmVolume}%
                           </span>
                         </div>
@@ -958,6 +1013,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                           min="0"
                           max="100"
                           value={bgmVolume}
+                          disabled={busy}
                           onChange={(e) => setBgmVolume(Number(e.target.value))}
                           className="h-1.5 w-full cursor-pointer rounded-lg bg-slate-200 dark:bg-slate-700 accent-blue-600"
                         />

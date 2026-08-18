@@ -42,8 +42,8 @@ TARGET_SECONDS = {
 
 _JOB_ID_RE = re.compile(r"^[a-f0-9]{8,32}$")
 
-# 全局成片渲染并发闸：批量成片最多同时跑 4 条，避免同时起几十路 FFmpeg 打爆本机
-_RUN_SEMAPHORE = threading.Semaphore(4)
+# 全局成片渲染并发闸：批量成片最多同时跑 2 条，避免多路 FFmpeg + AI 并发打爆机器 CPU
+_RUN_SEMAPHORE = threading.Semaphore(2)
 
 
 class JobManager:
@@ -131,6 +131,7 @@ class JobManager:
         now = datetime.now(timezone.utc).isoformat()
         job = JobOut(
             id=job_id,
+            batch_id=req.batch_id,
             status=JobStatus.queued,
             progress=0,
             message="任务已排队",
@@ -171,7 +172,28 @@ class JobManager:
                 job_count = chunk_count
 
         base_title = req.title or f"{group.name} · 带货成片"
+        batch_id = req.batch_id or f"batch_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         created: list[JobOut] = []
+
+        # 自动加载背景音乐库列表，支持全自动轮播匹配
+        bgm_candidates: list[str] = []
+        if req.add_bgm:
+            if req.bgm_file and req.bgm_file != "auto":
+                bgm_candidates = [req.bgm_file]
+            else:
+                settings.bgm_dir.mkdir(parents=True, exist_ok=True)
+                exts = (".mp3", ".mp4", ".wav", ".m4a", ".aac", ".flac", ".ogg")
+                bgm_candidates = [
+                    p.name
+                    for p in sorted(settings.bgm_dir.glob("*"))
+                    if p.is_file() and p.suffix.lower() in exts and p.name != "default_bed.mp3"
+                ]
+                if not bgm_candidates:
+                    bgm_candidates = [
+                        p.name
+                        for p in sorted(settings.bgm_dir.glob("*"))
+                        if p.is_file() and p.suffix.lower() in exts
+                    ]
 
         for i in range(job_count):
             title = base_title if job_count == 1 else f"{base_title} #{i + 1}"
@@ -191,8 +213,17 @@ class JobManager:
                 rng = random.Random(i * 1009 + 42 + (77 if req.deep_dedup else 0))
                 rng.shuffle(selected_chunk)
 
+            # 3. 智能分配专属背景音乐 (Auto BGM rotation)
+            variant_bgm = req.bgm_file
+            if req.add_bgm:
+                if req.bgm_file and req.bgm_file != "auto":
+                    variant_bgm = req.bgm_file
+                elif bgm_candidates:
+                    variant_bgm = bgm_candidates[i % len(bgm_candidates)]
+
             job = self.create(
                 GenerateRequest(
+                    batch_id=batch_id,
                     material_ids=selected_chunk,
                     group_id=req.group_id,
                     duration_preference=req.duration_preference,
@@ -205,7 +236,7 @@ class JobManager:
                     add_subtitles=req.add_subtitles,
                     add_bgm=req.add_bgm,
                     bgm_volume=req.bgm_volume,
-                    bgm_file=req.bgm_file,
+                    bgm_file=variant_bgm,
                     title=title,
                     mode=req.mode,
                     extract_rules=req.extract_rules,
@@ -244,7 +275,7 @@ class JobManager:
                 )
 
             if req.mode == "sell":
-                on_progress(3, "必剪 ASR 转写中（整句切分，避免切半字）…")
+                on_progress(3, "必剪 ASR 转写中（自然停顿断句，保持语意完整）…")
                 transcribed = []
                 total = len(materials)
                 for idx, m in enumerate(materials):
@@ -268,7 +299,7 @@ class JobManager:
                         "也可在设置中配置 OpenAI 兼容密钥作为 Whisper 回退"
                     )
 
-                on_progress(32, "按带货结构选句（过滤导流否词，介绍→价格）…")
+                on_progress(32, "智能构建连贯话术段落（开场抓人→卖点种草→破价逼单）…")
                 rules = ExtractRules.from_dict(
                     req.extract_rules,
                     negative_words=req.negative_words,
@@ -284,7 +315,7 @@ class JobManager:
                 magic_cues = build_magic_cues(plan, variant=req.variant_index)
 
                 if has_openai_key():
-                    on_progress(33, "DeepSeek AI 主观判断选句中…")
+                    on_progress(33, "DeepSeek AI 智能编排连贯话术段落…")
                     candidates = collect_ai_candidates(transcribed, rules=rules)
                     judged = ai_judge_sell_plan(
                         candidates,
@@ -293,13 +324,13 @@ class JobManager:
                     )
                     if judged:
                         plan, magic_cues = judged
-                        on_progress(34, "AI 已选定高转化句 + 神奇大字方案…")
+                        on_progress(34, "AI 已精选完整连贯段落与神奇大字…")
                     else:
-                        on_progress(34, "AI 未返回有效方案，已回退规则选句…")
+                        on_progress(34, "AI 未返回有效方案，已回退规则连贯段落…")
                 elif req.variant_index:
                     on_progress(
                         34,
-                        f"差异化剪辑方案 #{req.variant_index + 1} 已生成…",
+                        f"差异化连贯剪辑方案 #{req.variant_index + 1} 已生成…",
                     )
 
                 if not plan:

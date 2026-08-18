@@ -48,3 +48,4 @@ backend/data/intput/
 *.njsproj
 *.sln
 *.sw?
+xhs_report.html

@@ -3,7 +3,6 @@ import { useLocation } from "react-router-dom"
 import {
   Bookmark,
   Check,
-  CheckCircle2,
   Copy,
   Dices,
   Download,
@@ -452,7 +451,7 @@ export function CoverView() {
           title: mat.title || mat.filename,
           filename: mat.filename,
           label: defaultLabel,
-          source: "material",
+          source: "material" as const,
           materialId: mat.id,
         },
       ].slice(0, 4))

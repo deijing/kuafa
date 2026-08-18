@@ -13,10 +13,15 @@ from app.services.ffmpeg_pipeline import (
 from app.services.sell_planner import EditClip, MagicCue
 
 
-def ensure_default_bgm() -> Path:
-    """Create a simple looping bed if no user BGM exists."""
+def find_available_bgm(preferred: str | None = None) -> Path | None:
+    """查找用户上传的背景音乐，如果未上传则返回 None（默认无内置音乐）"""
     bgm_dir = settings.bgm_dir
     bgm_dir.mkdir(parents=True, exist_ok=True)
+    if preferred and preferred != "auto":
+        target = bgm_dir / preferred
+        if target.exists() and target.is_file():
+            return target
+
     existing = sorted(
         [
             *bgm_dir.glob("*.mp3"),
@@ -30,38 +35,7 @@ def ensure_default_bgm() -> Path:
     )
     if existing:
         return existing[0]
-
-    out = bgm_dir / "default_bed.mp3"
-    if out.exists():
-        return out
-    # lightweight synthetic bed (not a song, just energy under voice)
-    run_cmd(
-        [
-            settings.ffmpeg_bin,
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=196:duration=90",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=247:duration=90",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=294:duration=90",
-            "-filter_complex",
-            "[0:a][1:a][2:a]amix=inputs=3:duration=longest:dropout_transition=0,volume=0.18",
-            "-c:a",
-            "libmp3lame",
-            "-q:a",
-            "6",
-            str(out),
-        ],
-        timeout=120,
-    )
-    return out
+    return None
 
 
 def _ass_escape(text: str) -> str:
@@ -76,7 +50,7 @@ def _ass_escape(text: str) -> str:
 def split_subtitle_chunks(text: str, *, max_chars: int = 10) -> list[str]:
     """
     口播字幕按「一段一段」切开：每段不超过 max_chars 字，单行不换行。
-    优先在标点断开，再按字数硬切。
+    优先在标点断开，再按字数软切。
     """
     text = _ass_escape(re.sub(r"\s+", "", text.strip()))
     if not text:
@@ -84,7 +58,7 @@ def split_subtitle_chunks(text: str, *, max_chars: int = 10) -> list[str]:
 
     parts = re.split(r"(?<=[，。！？；、,.!?;:])", text)
     chunks: list[str] = []
-    soft = set("的了呢啊嘛吧呀哦")
+    soft = set("的了呢啊嘛吧呀哦哈")
 
     for part in parts:
         part = part.strip()
@@ -117,6 +91,57 @@ def _ts(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{c:02d}"
 
 
+def fuse_adjacent_clips(
+    clips: list[EditClip],
+    max_gap: float = 1.0,
+) -> tuple[list[EditClip], list[EditClip]]:
+    """
+    智能将同素材且时间相连的句子融合成连续的大视频切片，
+    同时返回时间轴完全对齐的 subtitle_clips（用于精准单句字幕烧录）。
+    彻底避免在同素材内部反复做硬切和拼接导致的微卡顿与音爆。
+    """
+    if not clips:
+        return [], []
+
+    # 1. 调整相邻句子的边界，平滑消除 ASR 细微切分缝隙（<=1.0s），保证音画完全连续且字幕不漂移
+    aligned_clips: list[EditClip] = []
+    for i, clip in enumerate(clips):
+        start = clip.start
+        end = clip.end
+        if i + 1 < len(clips):
+            nxt = clips[i + 1]
+            if nxt.path == clip.path and 0.0 <= (nxt.start - end) <= max_gap:
+                end = nxt.start
+        aligned_clips.append(
+            EditClip(
+                path=clip.path,
+                start=start,
+                end=end,
+                text=clip.text,
+                role=clip.role,
+            )
+        )
+
+    # 2. 将同一素材中连续相接的句子合并为一个连续切片进行 FFmpeg 截取
+    video_segments: list[EditClip] = []
+    curr = aligned_clips[0]
+    for nxt in aligned_clips[1:]:
+        if nxt.path == curr.path and abs(nxt.start - curr.end) < 0.05:
+            curr = EditClip(
+                path=curr.path,
+                start=curr.start,
+                end=nxt.end,
+                text=f"{curr.text} {nxt.text}".strip(),
+                role=curr.role,
+            )
+        else:
+            video_segments.append(curr)
+            curr = nxt
+    video_segments.append(curr)
+
+    return video_segments, aligned_clips
+
+
 def write_ass_subtitles(
     clips: list[EditClip],
     ass_path: Path,
@@ -130,7 +155,6 @@ def write_ass_subtitles(
     - Default：口播字幕，每段 ≤10 字、单行不换行，按时长比例逐段弹出
     - Hook：神奇大字，顶部缩放淡入动效
     """
-    # WrapStyle:2 = 不自动换行；字幕内容本身也不含 \N
     font_name = resolve_subtitle_font()
     margin_v = 380 if subtitle_position == "high" else (500 if subtitle_position == "mid" else 260)
     header = f"""[Script Info]
@@ -164,14 +188,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         t = clip_start
         for i, (chunk, w) in enumerate(zip(chunks, weights)):
             share = dur * (w / weight_sum)
-            # 最短可读时长，末段吃掉余量避免时间缝隙
             if i == len(chunks) - 1:
                 end = clip_end
             else:
                 end = min(clip_end, t + max(0.28 / speed, share))
             if end <= t:
                 end = min(clip_end, t + 0.28 / speed)
-            # 轻微淡入，单行展示
             text = "{\\fad(80,60)}" + chunk
             lines.append(
                 f"Dialogue: 0,{_ts(t)},{_ts(end)},Default,,0,0,0,,{text}\n"
@@ -185,7 +207,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             continue
         start = max(0.0, cue.at / speed)
         end = start + max(0.8, cue.duration / speed)
-        # 缩放弹入 + 淡入淡出（神奇大字动效）
         anim = (
             r"{\fad(120,220)\t(0,180,\fscx128\fscy128)"
             r"\t(180,360,\fscx100\fscy100)\bord5\shad0}"
@@ -220,7 +241,10 @@ def render_sell_video(
     work = settings.work_dir / output.stem
     work.mkdir(parents=True, exist_ok=True)
 
-    # 动态根据用户选择的画质设置分辨率与 CRF 压缩质量
+    # 1. 智能相邻片段融合，生成连续的视频切片与对齐的字幕切片
+    video_segments, subtitle_clips = fuse_adjacent_clips(clips, max_gap=1.0)
+
+    # 2. 动态根据用户选择的画质设置分辨率与 CRF 压缩质量
     vq = (video_quality or "1080p").lower()
     if vq == "4k":
         w, h, crf_val, preset_val = 2160, 3840, "17", "fast"
@@ -233,41 +257,57 @@ def render_sell_video(
 
     fps = settings.target_fps
     segment_files: list[Path] = []
-    n = len(clips)
+    n = len(video_segments)
 
-    for i, clip in enumerate(clips):
-        # 进度接在 ASR(~32%) 之后，保持单调：35→75
-        on_progress(35 + int(40 * i / max(n, 1)), f"按句切割片段 {i + 1}/{n}…")
-        seg = work / f"seg_{i:03d}.mp4"
-        raw_dur = max(0.2, clip.end - clip.start)
-        info = probe(clip.path)
-        
+    for i, seg_clip in enumerate(video_segments):
+        on_progress(35 + int(40 * i / max(n, 1)), f"按连贯段落截取片段 {i + 1}/{n}…")
+        seg_file = work / f"seg_{i:03d}.mp4"
+        raw_dur = max(0.2, seg_clip.end - seg_clip.start)
+        info = probe(seg_clip.path)
+
         vf_filter = (
             f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
         )
         if abs(speech_speed - 1.0) > 0.01:
-            vf_filter += f"setpts=PTS/{speech_speed:.4f},"
+            vf_filter += f"setpts=(PTS-STARTPTS)/{speech_speed:.4f},"
+        else:
+            vf_filter += "setpts=PTS-STARTPTS,"
         vf_filter += f"fps={fps},format=yuv420p"
 
-        # -ss 放在 -i 之后：按 ASR 时间戳精确切，避免关键帧近似切到半个字
+        # 组合 Seek 算法（精准裁剪 + 毫秒级对齐）：
+        pre_roll = min(3.0, seg_clip.start)
+        fast_seek = max(0.0, seg_clip.start - pre_roll)
+        fine_seek = seg_clip.start - fast_seek
+        seg_dur = max(0.2, raw_dur / speech_speed)
+
         cmd = [
             settings.ffmpeg_bin,
             "-y",
-            "-i",
-            str(clip.path),
             "-ss",
-            f"{clip.start:.3f}",
+            f"{fast_seek:.3f}",
+            "-i",
+            str(seg_clip.path),
+            "-ss",
+            f"{fine_seek:.3f}",
             "-t",
-            f"{raw_dur:.3f}",
+            f"{seg_dur:.3f}",
             "-vf",
             vf_filter,
         ]
+
         if info.has_audio:
             af_filter = ""
             if abs(speech_speed - 1.0) > 0.01:
                 af_filter += f"atempo={speech_speed:.4f},"
-            af_filter += "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo"
+            af_filter += (
+                "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                "asetpts=PTS-STARTPTS"
+            )
+            # 轻微平滑淡入淡出（25ms），消除切点电流音/破音
+            if seg_dur >= 1.0:
+                fade_out_st = max(0.1, seg_dur - 0.035)
+                af_filter += f",afade=t=in:ss=0:d=0.025,afade=t=out:st={fade_out_st:.3f}:d=0.035"
             cmd += ["-af", af_filter]
         else:
             cmd += [
@@ -277,6 +317,7 @@ def render_sell_video(
                 "anullsrc=channel_layout=stereo:sample_rate=44100",
                 "-shortest",
             ]
+
         cmd += [
             "-c:v",
             "libx264",
@@ -292,10 +333,10 @@ def render_sell_video(
             "192k",
             "-movflags",
             "+faststart",
-            str(seg),
+            str(seg_file),
         ]
         run_cmd(cmd, timeout=300)
-        segment_files.append(seg)
+        segment_files.append(seg_file)
 
     on_progress(76, "拼接 9:16 成片…")
     concat_list = work / "concat.txt"
@@ -336,14 +377,12 @@ def render_sell_video(
             "烧录字幕与神奇大字动效…" if magic_cues else "烧录口播字幕…",
         )
         write_ass_subtitles(
-            clips if add_subtitles else [],
+            subtitle_clips if add_subtitles else [],
             work / "subs.ass",
             magic_cues=magic_cues,
             speech_speed=speech_speed,
             subtitle_position=subtitle_position,
         )
-        # 在 work 目录内用相对文件名跑 ffmpeg，规避 subtitles 滤镜对
-        # 绝对路径里的特殊字符（空格/单引号/中文/盘符）转义出错的问题。
         subtitled = work / "subtitled.mp4"
         run_cmd(
             [
@@ -371,49 +410,42 @@ def render_sell_video(
         current = subtitled
 
     if add_bgm:
-        on_progress(88, "混入背景音乐…")
-        bgm_path = None
-        if bgm_file:
-            target_bgm = settings.bgm_dir / bgm_file
-            if target_bgm.exists():
-                bgm_path = target_bgm
-        if not bgm_path:
-            bgm_path = ensure_default_bgm()
-
-        volume_val = max(0.0, min(1.0, bgm_volume / 100.0))
-        mixed = work / "mixed.mp4"
-        # Loop BGM, apply user-specified volume, keep voice dominant
-        run_cmd(
-            [
-                settings.ffmpeg_bin,
-                "-y",
-                "-i",
-                str(current),
-                "-stream_loop",
-                "-1",
-                "-i",
-                str(bgm_path),
-                "-filter_complex",
-                f"[1:a]volume={volume_val:.2f},afade=t=in:st=0:d=1[bg];"
-                "[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[aout]",
-                "-map",
-                "0:v",
-                "-map",
-                "[aout]",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-shortest",
-                "-movflags",
-                "+faststart",
-                str(mixed),
-            ],
-            timeout=300,
-        )
-        current = mixed
+        bgm_path = find_available_bgm(bgm_file)
+        if bgm_path:
+            on_progress(88, f"混入背景音乐「{bgm_path.stem}」…")
+            volume_val = max(0.0, min(1.0, bgm_volume / 100.0))
+            mixed = work / "mixed.mp4"
+            run_cmd(
+                [
+                    settings.ffmpeg_bin,
+                    "-y",
+                    "-i",
+                    str(current),
+                    "-stream_loop",
+                    "-1",
+                    "-i",
+                    str(bgm_path),
+                    "-filter_complex",
+                    f"[1:a]volume={volume_val:.2f},afade=t=in:st=0:d=1[bg];"
+                    "[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                    "-map",
+                    "0:v",
+                    "-map",
+                    "[aout]",
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "192k",
+                    "-shortest",
+                    "-movflags",
+                    "+faststart",
+                    str(mixed),
+                ],
+                timeout=300,
+            )
+            current = mixed
 
     on_progress(96, "写出最终成片…")
     output.write_bytes(current.read_bytes())

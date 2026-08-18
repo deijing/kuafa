@@ -34,6 +34,7 @@ export type JobStatus = "queued" | "running" | "succeeded" | "failed"
 
 export type Job = {
   id: string
+  batch_id?: string | null
   status: JobStatus
   progress: number
   message: string
@@ -51,8 +52,13 @@ export type Job = {
 
 export type BgmItem = {
   filename: string
+  title: string
   url: string
   size_bytes: number
+  duration: number | null
+  duration_label?: string
+  created_at?: string
+  is_default?: boolean
 }
 
 export type VideoQuality = "4k" | "2k" | "1080p" | "720p"
@@ -60,6 +66,7 @@ export type VideoQuality = "4k" | "2k" | "1080p" | "720p"
 export type GeneratePayload = {
   material_ids: string[]
   group_id?: string | null
+  batch_id?: string | null
   duration_preference: DurationPreference
   target_seconds?: number
   speech_speed?: number
@@ -86,6 +93,7 @@ export type GeneratePayload = {
 export type BatchGeneratePayload = {
   group_id: string
   count: number
+  batch_id?: string | null
   material_ids?: string[]
   duration_preference: DurationPreference
   target_seconds?: number
@@ -505,3 +513,18 @@ export async function uploadBgm(file: File) {
     body: form,
   })
 }
+
+export async function deleteBgmFile(filename: string) {
+  return request<{ status: string; deleted: string }>(`/api/bgm/${encodeURIComponent(filename)}`, {
+    method: "DELETE",
+  })
+}
+
+export async function renameBgmFile(filename: string, newTitle: string) {
+  return request<BgmItem>("/api/bgm/rename", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename, new_title: newTitle }),
+  })
+}
+

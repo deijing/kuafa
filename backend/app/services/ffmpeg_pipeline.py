@@ -320,23 +320,29 @@ def render_highlight_reel(
         seg = work / f"seg_{i:03d}.mp4"
         duration = max(0.2, end - start)
         info = probe(src)
-        # -ss after -i for frame-accurate cuts
+        # 组合 Seek 算法：前置 fast_seek 快速跳过关键帧，后置 fine_seek 精确对齐起始帧
+        pre_roll = min(3.0, start)
+        fast_seek = max(0.0, start - pre_roll)
+        fine_seek = start - fast_seek
+
         cmd = [
             settings.ffmpeg_bin,
             "-y",
+            "-ss",
+            f"{fast_seek:.3f}",
             "-i",
             str(src),
             "-ss",
-            str(start),
+            f"{fine_seek:.3f}",
             "-t",
-            str(duration),
+            f"{duration:.3f}",
         ]
         if info.has_audio:
             cmd += [
                 "-vf",
-                f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p",
+                f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS,fps={fps},format=yuv420p",
                 "-af",
-                "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo",
+                "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS",
             ]
         else:
             cmd += [
@@ -345,7 +351,7 @@ def render_highlight_reel(
                 "-i",
                 "anullsrc=channel_layout=stereo:sample_rate=44100",
                 "-vf",
-                f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p",
+                f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS,fps={fps},format=yuv420p",
                 "-shortest",
             ]
         cmd += [

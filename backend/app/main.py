@@ -28,6 +28,7 @@ from app.models import (
     ApiSecretsOut,
     BatchGenerateOut,
     BatchGenerateRequest,
+    BgmOut,
     CreateGroupRequest,
     CatsAPIProbeRequest,
     CatsAPITestOut,
@@ -49,6 +50,7 @@ from app.models import (
     OpenAIModelsOut,
     OpenAIProbeRequest,
     OpenAITestOut,
+    RenameBgmRequest,
     RenameGroupRequest,
     UpdateApiSecretsRequest,
     UpdateLibrarySettingsRequest,
@@ -106,38 +108,82 @@ app.mount(
     name="covers",
 )
 settings.bgm_dir.mkdir(parents=True, exist_ok=True)
-app.mount(
-    "/api/bgm",
-    StaticFiles(directory=str(settings.bgm_dir)),
-    name="bgm",
-)
 
 
 ALLOWED_BGM_EXTENSIONS = (".mp3", ".mp4", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".mov", ".mkv", ".webm")
+_bgm_duration_cache: dict[str, float] = {}
 
 
-@app.get("/api/bgm")
-def list_bgm_files() -> list[dict[str, object]]:
+def probe_audio_duration(path: Path) -> float | None:
+    """提取音频文件真实时长（秒），带内存缓存"""
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    key = f"{path.name}_{path.stat().st_mtime}_{path.stat().st_size}"
+    if key in _bgm_duration_cache:
+        return _bgm_duration_cache[key]
+    try:
+        import subprocess
+        res = subprocess.run(
+            [
+                settings.ffprobe_bin,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            dur = float(res.stdout.strip())
+            _bgm_duration_cache[key] = dur
+            return dur
+    except Exception:
+        pass
+    return None
+
+
+@app.get("/api/bgm", response_model=list[BgmOut])
+def list_bgm_files() -> list[BgmOut]:
     settings.bgm_dir.mkdir(parents=True, exist_ok=True)
-    results = []
+    results: list[BgmOut] = []
     for p in sorted(settings.bgm_dir.glob("*")):
-        if p.suffix.lower() in ALLOWED_BGM_EXTENSIONS:
-            results.append({
-                "filename": p.name,
-                "url": f"/api/bgm/{p.name}",
-                "size_bytes": p.stat().st_size,
-            })
+        if p.is_file() and p.suffix.lower() in ALLOWED_BGM_EXTENSIONS:
+            dur = probe_audio_duration(p)
+            dur_label = "--:--"
+            if dur is not None and dur > 0:
+                mins = int(dur // 60)
+                secs = int(dur % 60)
+                dur_label = f"{mins:02d}:{secs:02d}"
+            
+            created_str = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+            results.append(
+                BgmOut(
+                    filename=p.name,
+                    title=p.stem,
+                    url=f"/api/bgm/{p.name}",
+                    size_bytes=p.stat().st_size,
+                    duration=dur,
+                    duration_label=dur_label,
+                    created_at=created_str,
+                    is_default=p.name == "default_bed.mp3",
+                )
+            )
     return results
 
 
-@app.post("/api/bgm/upload")
-async def upload_bgm_file(file: UploadFile = File(...)) -> dict[str, object]:
+@app.post("/api/bgm/upload", response_model=BgmOut)
+async def upload_bgm_file(file: UploadFile = File(...)) -> BgmOut:
     if not file.filename:
         raise HTTPException(400, "缺少文件名")
     safe_name = Path(file.filename).name
     ext = Path(safe_name).suffix.lower()
     if ext not in ALLOWED_BGM_EXTENSIONS:
-        raise HTTPException(400, "仅支持 mp3, mp4, wav, m4a, aac 等音视频格式")
+        raise HTTPException(400, "仅支持 mp3, mp4, wav, m4a, aac, flac, ogg 等音视频格式")
     settings.bgm_dir.mkdir(parents=True, exist_ok=True)
     save_path = settings.bgm_dir / safe_name
     import shutil
@@ -147,11 +193,81 @@ async def upload_bgm_file(file: UploadFile = File(...)) -> dict[str, object]:
     if size == 0:
         save_path.unlink(missing_ok=True)
         raise HTTPException(400, "空音频文件")
-    return {
-        "filename": safe_name,
-        "url": f"/api/bgm/{safe_name}",
-        "size_bytes": size,
-    }
+    
+    dur = probe_audio_duration(save_path)
+    dur_label = "--:--"
+    if dur is not None and dur > 0:
+        mins = int(dur // 60)
+        secs = int(dur % 60)
+        dur_label = f"{mins:02d}:{secs:02d}"
+    
+    created_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    return BgmOut(
+        filename=safe_name,
+        title=save_path.stem,
+        url=f"/api/bgm/{safe_name}",
+        size_bytes=size,
+        duration=dur,
+        duration_label=dur_label,
+        created_at=created_str,
+        is_default=safe_name == "default_bed.mp3",
+    )
+
+
+@app.post("/api/bgm/rename", response_model=BgmOut)
+def rename_bgm_file(payload: RenameBgmRequest) -> BgmOut:
+    safe_name = Path(payload.filename).name
+    target = settings.bgm_dir / safe_name
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, f"背景音乐「{safe_name}」不存在")
+    
+    clean_title = payload.new_title.strip()
+    if not clean_title:
+        raise HTTPException(400, "新标题不能为空")
+    
+    ext = target.suffix
+    new_safe_name = f"{clean_title}{ext}"
+    new_path = settings.bgm_dir / new_safe_name
+    if new_path != target and new_path.exists():
+        raise HTTPException(400, f"已存在同名背景音乐「{new_safe_name}」")
+    
+    target.rename(new_path)
+    dur = probe_audio_duration(new_path)
+    dur_label = "--:--"
+    if dur is not None and dur > 0:
+        mins = int(dur // 60)
+        secs = int(dur % 60)
+        dur_label = f"{mins:02d}:{secs:02d}"
+    
+    return BgmOut(
+        filename=new_safe_name,
+        title=clean_title,
+        url=f"/api/bgm/{new_safe_name}",
+        size_bytes=new_path.stat().st_size,
+        duration=dur,
+        duration_label=dur_label,
+        created_at=datetime.fromtimestamp(new_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+        is_default=new_safe_name == "default_bed.mp3",
+    )
+
+
+@app.delete("/api/bgm/{filename}")
+def delete_bgm_file(filename: str) -> dict[str, object]:
+    safe_name = Path(filename).name
+    target = settings.bgm_dir / safe_name
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, f"背景音乐「{safe_name}」不存在")
+    target.unlink(missing_ok=True)
+    return {"status": "ok", "deleted": safe_name}
+
+
+@app.get("/api/bgm/{filename}")
+def get_bgm_file(filename: str) -> FileResponse:
+    safe_name = Path(filename).name
+    target = settings.bgm_dir / safe_name
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, f"背景音乐「{safe_name}」不存在")
+    return FileResponse(target)
 
 
 @app.get("/api/health")

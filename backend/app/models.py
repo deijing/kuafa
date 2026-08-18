@@ -91,6 +91,8 @@ class GenerateRequest(BaseModel):
     shuffle_clips: bool = True
     # 深度音视频降重防重 (微速/微剪/Hook重构)
     deep_dedup: bool = True
+    # 归属批量项目批次 ID
+    batch_id: str | None = None
 
 
 class BatchGenerateRequest(BaseModel):
@@ -98,6 +100,7 @@ class BatchGenerateRequest(BaseModel):
 
     group_id: str
     count: int = Field(default=1, ge=1, le=50)
+    batch_id: str | None = None
     material_ids: list[str] = Field(default_factory=list)
     duration_preference: DurationPreference = DurationPreference.mid
     target_seconds: float | None = Field(default=None, ge=15.0, le=180.0)
@@ -283,6 +286,7 @@ class EnvCheckResult(BaseModel):
 
 class JobOut(BaseModel):
     id: str
+    batch_id: str | None = None
     status: JobStatus
     progress: int = 0
     message: str = ""
@@ -300,3 +304,20 @@ class JobOut(BaseModel):
 
 class BatchGenerateOut(BaseModel):
     jobs: list[JobOut] = Field(default_factory=list)
+
+
+class BgmOut(BaseModel):
+    filename: str
+    title: str
+    url: str
+    size_bytes: int
+    duration: float | None = None
+    duration_label: str = "--:--"
+    created_at: str | None = None
+    is_default: bool = False
+
+
+class RenameBgmRequest(BaseModel):
+    filename: str
+    new_title: str
+

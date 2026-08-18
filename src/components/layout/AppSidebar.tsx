@@ -3,6 +3,7 @@ import {
   History,
   Image,
   Layers,
+  Music,
   PieChart,
   WandSparkles,
   Zap,
@@ -23,6 +24,7 @@ const navItems: {
 }[] = [
   { id: "dashboard", label: "工作台", icon: PieChart },
   { id: "library", label: "素材库", icon: Clapperboard },
+  { id: "bgm", label: "背景音乐库", icon: Music },
   { id: "generator", label: "智能混剪", icon: WandSparkles },
   { id: "batch", label: "批量制作", icon: Layers, hot: true },
   { id: "cover", label: "封面生成", icon: Image },

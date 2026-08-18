@@ -78,13 +78,16 @@ def extract_video_frame(video_path: Path, timestamp_sec: float, out_jpeg: Path) 
         except Exception:
             pass
 
-        # 2. 回退精确逐帧 seek 模式（防止首部关键帧异常或 pts 偏移）
+        # 2. 回退精确逐帧 seek 模式（先快跳至前 5 秒，再向前微调，防止全量扫描超时）
         try:
+            fast_seek = max(0.0, ts - 5.0)
+            fine_seek = ts - fast_seek
             run_cmd([
                 settings.ffmpeg_bin,
                 "-y",
+                "-ss", f"{fast_seek:.2f}",
                 "-i", str(video_path),
-                "-ss", f"{ts:.2f}",
+                "-ss", f"{fine_seek:.2f}",
                 "-vframes", "1",
                 "-q:v", "2",
                 str(out_jpeg),

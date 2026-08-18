@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-
 import { AppHeader } from "@/components/layout/AppHeader"
 import { AppSidebar } from "@/components/layout/AppSidebar"
 import { BatchView } from "@/components/views/BatchView"
+import { BgmView } from "@/components/views/BgmView"
 import { CoverView } from "@/components/views/CoverView"
 import { DashboardView } from "@/components/views/DashboardView"
 import { GeneratorView } from "@/components/views/GeneratorView"
@@ -64,6 +65,15 @@ export function App() {
                 }
               />
               <Route
+                path={TAB_PATHS.bgm}
+                element={
+                  <BgmView
+                    onGoBatch={() => navigate(TAB_PATHS.batch)}
+                    onGoGenerator={() => navigate(TAB_PATHS.generator)}
+                  />
+                }
+              />
+              <Route
                 path={TAB_PATHS.generator}
                 element={
                   <GeneratorView
@@ -77,7 +87,6 @@ export function App() {
                 element={
                   <BatchView
                     onGoLibrary={() => navigate(TAB_PATHS.library)}
-                    onGoHistory={() => navigate(TAB_PATHS.history)}
                   />
                 }
               />
