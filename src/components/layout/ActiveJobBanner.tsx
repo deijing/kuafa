@@ -14,7 +14,7 @@ export function ActiveJobBanner() {
   const firstJob = activeJobs[0]
 
   return (
-    <div className="z-20 bg-blue-600 text-white shadow-md border-b border-blue-500/40 px-6 py-2.5 flex items-center justify-between transition-all animate-in slide-in-from-top duration-200">
+    <div className="relative z-20 bg-blue-600 text-white shadow-md border-b border-blue-500/40 px-6 py-2.5 flex items-center justify-between transition-all animate-in slide-in-from-top duration-200">
       <div className="flex items-center gap-3 min-w-0">
         <div className="flex size-7 items-center justify-center rounded-lg bg-white/20 shrink-0">
           <Loader2 className="size-4 animate-spin text-white" />

@@ -56,7 +56,7 @@ export function AppHeader({ title, onNewProject }: AppHeaderProps) {
   }
 
   return (
-    <header className="sticky top-0 z-10 flex h-16 items-center justify-between bg-[#F7F8FA]/90 dark:bg-slate-900/90 px-8 backdrop-blur-md transition-colors">
+    <header className="sticky top-0 z-40 flex h-16 items-center justify-between bg-[#F7F8FA]/90 dark:bg-slate-900/90 px-8 backdrop-blur-md transition-colors">
       <h2 className="text-lg font-bold text-[#111827] dark:text-slate-100">{title}</h2>
       <div className="flex items-center gap-3">
         <Button
@@ -71,7 +71,7 @@ export function AppHeader({ title, onNewProject }: AppHeaderProps) {
         </Button>
 
         {/* Notification Bell Dropdown */}
-        <div className="relative" ref={menuRef}>
+        <div className="relative z-50" ref={menuRef}>
           <Button
             variant="ghost"
             size="icon"

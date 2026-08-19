@@ -44,7 +44,7 @@ export function App() {
             <main className="relative flex h-full flex-1 flex-col overflow-hidden bg-background">
               <AppHeader title={TAB_TITLES[activeTab]} onNewProject={handleNewProject} />
               <ActiveJobBanner />
-              <div className="flex-1 overflow-y-auto p-8">
+              <div className="relative z-0 isolate flex-1 overflow-y-auto p-8">
             <Routes>
               <Route
                 path={TAB_PATHS.dashboard}

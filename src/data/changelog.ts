@@ -15,16 +15,42 @@ export type ChangelogItem = {
   }[]
 }
 
-export const APP_VERSION = "v1.5.0"
-export const APP_BUILD_DATE = "2026-08-18"
+export const APP_VERSION = "v1.5.1"
+export const APP_BUILD_DATE = "2026-08-19"
 
 export const CHANGELOG_DATA: ChangelogItem[] = [
+  {
+    version: "v1.5.1",
+    date: "2026-08-19",
+    title: "消息提醒层级隔离修复 · 批量工作台卡片交互与视觉优化",
+    tag: "🎨 视觉重构",
+    isLatest: true,
+    highlights: [
+      "🛡️ 消息提醒与弹层层级（z-index）彻底隔离：主视图引入 isolate 独立堆叠上下文，杜绝弹窗被 Sticky 栏与卡片穿透",
+      "🖼️ 批量成片卡片体验升级：重构配套封面缩略图布局与快捷放大预览交互，视觉更轻盈规整",
+      "⚡ 视频大屏预览与一键下载：优化成片卡片底部操作区层次，强化大屏预览与 MP4 秒级下载触发体验",
+    ],
+    details: [
+      {
+        type: "fix",
+        text: "消息通知与全局弹层层叠上下文（Stacking Context）深度隔离：为 App 主视图区域声明 relative z-0 isolate，使子页面的 sticky 操作栏及带 blur 特效的卡片层级完全封闭；将消息通知挂载容器升级为 relative z-50，彻底解决下拉通知面板被下方操作栏穿透截断的显示异常。",
+      },
+      {
+        type: "style",
+        text: "批量成片卡片视觉与交互细节重塑：优化卡片 3 张配套爆款封面缩略图微交互与序号角标，增强放大镜预览浮层；重构卡片底部「大屏预览」与「下载 MP4」按钮对比度与排版质感。",
+      },
+      {
+        type: "perf",
+        text: "全局 Toast 与后台运行条层级规范：重构 ToastContainer 与 ActiveJobBanner 的渲染层级与响应速度，确保在所有复杂多任务并行场景下界面交互流畅稳定。",
+      },
+    ],
+  },
   {
     version: "v1.5.0",
     date: "2026-08-18",
     title: "高连贯性切片叙事引擎 · 语义完整话术段落 · 背景音乐库与批量混剪体验升级",
     tag: "⚡ 算法优化",
-    isLatest: true,
+    isLatest: false,
     highlights: [
       "🎙️ ASR 智能自然停顿断句：引入静音间隙与语气词检测，彻底杜绝一句话说到一半就中断的现象",
       "🧩 语义连贯话术段落 (NarrativeBlock)：原片连续句子聚类为完整故事单元，保证段落内 100% 连贯",

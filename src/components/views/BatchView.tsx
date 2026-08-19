@@ -9,6 +9,7 @@ import {
   Info,
   Layers,
   Loader2,
+  Play,
   Plus,
   RefreshCw,
   ShieldAlert,
@@ -459,8 +460,8 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
       return {
         id: cluster.id,
         title: isThisCurrent
-          ? `本轮制作 (${clusterJobs.length}条)`
-          : `第 ${sessionNumber} 批次 (${clusterJobs.length}条) · ${groupName}`,
+          ? "本轮制作"
+          : `第 ${sessionNumber} 批次 · ${groupName}`,
         groupName,
         timeLabel: `${dateStr} ${timeStr}`,
         dateLabel: dateStr,
@@ -1742,19 +1743,25 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
 
             {/* Top Toolbar */}
             <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl px-5 py-3 shadow-2xs sticky top-0 z-20 backdrop-blur-md bg-white/95 dark:bg-slate-900/95">
-              <div className="flex items-center gap-2.5">
-                <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                  {currentSession ? currentSession.title : "批量成片"} ({displayedJobs.length} 条)
-                </span>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                    {currentSession ? currentSession.title : "批量成片"}
+                  </span>
+                  <span className="text-xs font-mono font-medium px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                    共 {displayedJobs.length} 条
+                  </span>
+                </div>
+
                 {displayedJobs.some((j) => j.status === "succeeded") ? (
                   <button
                     type="button"
                     onClick={toggleSelectAllExportJobs}
-                    className="text-xs font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400 cursor-pointer px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/40 transition-colors"
+                    className="text-xs font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400 cursor-pointer px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
                   >
                     {selectedExportJobIds.length === displayedJobs.filter((j) => j.status === "succeeded").length
                       ? "取消全选"
-                      : "全选已完成"}
+                      : `全选已完成 (${selectedExportJobIds.length}/${displayedJobs.filter((j) => j.status === "succeeded").length})`}
                   </button>
                 ) : null}
               </div>
@@ -1772,7 +1779,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                     className="h-8 px-3 text-xs font-semibold border-blue-200 bg-blue-50/80 text-blue-600 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-400 cursor-pointer gap-1.5 rounded-xl shadow-2xs"
                   >
                     <CirclePlay className="size-3.5 text-blue-600 dark:text-blue-400" />
-                    快速预览视频
+                    快速大屏连播
                   </Button>
                 ) : null}
 
@@ -1785,7 +1792,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                   className="h-8 text-xs font-semibold rounded-xl border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 cursor-pointer gap-1"
                 >
                   <Plus className="size-3.5" />
-                  新建页面
+                  新建批次
                 </Button>
 
                 {displayedJobs.some((j) => j.status === "succeeded") ? (
@@ -1798,7 +1805,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                     className="h-8 px-3 text-xs font-medium border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100 cursor-pointer gap-1.5 rounded-xl"
                   >
                     <Sparkles className="size-3.5 text-amber-500" />
-                    一键成片封面
+                    一键全套封面
                   </Button>
                 ) : null}
 
@@ -1821,11 +1828,10 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
               </div>
             </div>
 
-            {/* Cards Grid: Supports 20+ cards with smooth vertical scroll */}
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {/* Cards Grid: Modern, breathable, responsive video showcase grid */}
+            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4">
               {displayedJobs.map((job, index) => {
                 const done = job.status === "succeeded"
-                const failed = job.status === "failed"
                 const active = job.status === "queued" || job.status === "running"
                 const selected = previewJobId === job.id
                 const isChecked = selectedExportJobIds.includes(job.id)
@@ -1833,120 +1839,178 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                   groups.find((g) => g.id === job.group_id)?.name ?? "成片"
                 const isCoverLoading = coverLoadingJobId === job.id
                 const coversList = job.covers || []
+                const posterUrl = coversList[0]?.url
 
                 return (
                   <div
                     key={job.id}
                     className={cn(
-                      "flex flex-col justify-between rounded-2xl border p-4 text-left transition-all duration-200",
-                      selected
-                        ? "border-blue-500 bg-blue-50/40 dark:bg-blue-950/30 shadow-md ring-1 ring-blue-500/20"
-                        : "border-black/[0.06] dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs hover:border-slate-300 dark:hover:border-slate-700"
+                      "group flex flex-col justify-between rounded-2xl border bg-white dark:bg-slate-900 overflow-hidden transition-all duration-200 hover:shadow-md",
+                      isChecked
+                        ? "border-blue-500 ring-2 ring-blue-500/20 shadow-sm"
+                        : selected
+                          ? "border-blue-400 ring-1 ring-blue-400/20 shadow-xs"
+                          : "border-slate-200/80 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 shadow-2xs"
                     )}
                   >
                     <div>
-                      {/* Card Header: Checkbox + Group Name + Status badge */}
-                      <div className="flex items-center justify-between gap-2 mb-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          {done ? (
-                            <Checkbox
-                              checked={isChecked}
-                              onCheckedChange={() => toggleJobExportSelection(job.id)}
-                              onClick={(e) => e.stopPropagation()}
-                              className="rounded-[4px] border-slate-300 dark:border-slate-700 data-checked:bg-blue-600 data-checked:border-blue-600"
-                            />
-                          ) : null}
-                          <span className="truncate text-sm font-bold text-slate-900 dark:text-slate-100">
-                            {groupName}
-                            <span className="ml-1.5 font-mono text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 px-1.5 py-0.5 rounded-md border border-blue-200/60 dark:border-blue-900/60">
-                              #{index + 1}
-                            </span>
-                          </span>
-                        </div>
+                      {/* 1. Visual Hero Media Container (Aspect 16/10 for clean landscape preview poster or video thumbnail) */}
+                      <div
+                        onClick={() => {
+                          if (done && job.output_url) {
+                            handleOpenVideoPreview(job.id)
+                          }
+                        }}
+                        className={cn(
+                          "relative aspect-[16/10] w-full overflow-hidden bg-slate-950 select-none",
+                          done && job.output_url ? "cursor-pointer" : "cursor-default"
+                        )}
+                      >
                         {done ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200/60 shrink-0">
-                            <CheckCircle2 className="size-3 text-emerald-500" />
-                            已完成
-                          </span>
-                        ) : failed ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60 px-2 py-0.5 rounded-full border border-rose-200/60 shrink-0">
-                            <XCircle className="size-3 text-rose-500" />
-                            失败
-                          </span>
+                          <>
+                            {/* Poster Background */}
+                            {posterUrl ? (
+                              <img
+                                src={posterUrl}
+                                alt={groupName}
+                                className="size-full object-cover transition-transform duration-500 group-hover:scale-105"
+                              />
+                            ) : (
+                              <div className="size-full bg-gradient-to-br from-slate-900 via-slate-950 to-blue-950/40 flex items-center justify-center">
+                                <Film className="size-10 text-slate-700 group-hover:text-blue-500 transition-colors" />
+                              </div>
+                            )}
+
+                            {/* Dark Gradient & Glowing Play Overlay */}
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/40 group-hover:from-black/90 group-hover:via-black/40 group-hover:to-black/50 transition-all duration-200 flex flex-col items-center justify-center">
+                              <div className="flex size-11 items-center justify-center rounded-full bg-white/90 text-slate-900 group-hover:bg-blue-600 group-hover:text-white shadow-xl transition-all duration-200 group-hover:scale-110">
+                                <Play className="size-5 fill-current ml-0.5" />
+                              </div>
+                              <span className="mt-1.5 text-[11px] font-semibold text-white/90 drop-shadow opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                                点击大屏播放
+                              </span>
+                            </div>
+
+                            {/* Floating Badges */}
+                            {/* Top-Left: Checkbox + Sequence Number */}
+                            <div
+                              className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <Checkbox
+                                checked={isChecked}
+                                onCheckedChange={() => toggleJobExportSelection(job.id)}
+                                className="rounded-[4px] border-white/60 bg-black/40 data-checked:bg-blue-600 data-checked:border-blue-600 backdrop-blur-md size-4 shadow-sm"
+                              />
+                              <span className="px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-md text-white text-[11px] font-mono font-bold border border-white/10 shadow-sm">
+                                #{index + 1}
+                              </span>
+                            </div>
+
+                            {/* Top-Right: Status Badge */}
+                            <div className="absolute top-2.5 right-2.5 z-10">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/90 backdrop-blur-md text-white text-[11px] font-semibold shadow-sm border border-emerald-400/30">
+                                <CheckCircle2 className="size-3" />
+                                已完成
+                              </span>
+                            </div>
+
+                            {/* Bottom-Left: Format Badge */}
+                            <div className="absolute bottom-2.5 left-2.5 z-10">
+                              <span className="px-1.5 py-0.5 rounded bg-black/70 backdrop-blur-md text-slate-200 text-[10px] font-mono font-medium border border-white/10">
+                                9:16 FHD
+                              </span>
+                            </div>
+
+                            {/* Bottom-Right: Duration Badge */}
+                            <div className="absolute bottom-2.5 right-2.5 z-10">
+                              <span className="px-2 py-0.5 rounded bg-black/70 backdrop-blur-md text-white text-[11px] font-mono font-bold border border-white/10">
+                                {job.duration ? `${Math.round(job.duration)}s` : "00:45"}
+                              </span>
+                            </div>
+                          </>
+                        ) : active ? (
+                          /* Running / Queued State */
+                          <div className="size-full flex flex-col items-center justify-center p-4 text-center relative">
+                            <div className="absolute inset-0 bg-gradient-to-r from-blue-600/10 via-indigo-600/15 to-blue-600/10 animate-pulse" />
+                            {/* Top badges */}
+                            <div className="absolute top-2.5 left-2.5 z-10">
+                              <span className="px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-md text-white text-[11px] font-mono font-bold border border-white/10">
+                                #{index + 1}
+                              </span>
+                            </div>
+                            <div className="absolute top-2.5 right-2.5 z-10">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-600/90 backdrop-blur-md text-white text-[11px] font-semibold shadow-sm animate-pulse">
+                                <Loader2 className="size-3 animate-spin" />
+                                剪辑中
+                              </span>
+                            </div>
+
+                            <Loader2 className="size-8 animate-spin text-blue-500 mb-2 z-10" />
+                            <span className="text-base font-mono font-bold text-white z-10 tracking-tight">
+                              {job.progress}%
+                            </span>
+                            <span className="text-xs text-slate-400 mt-1 z-10 max-w-[85%] truncate">
+                              {job.message || "正在智能合成剪辑中…"}
+                            </span>
+                          </div>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded-full border border-blue-200/60 shrink-0">
-                            <Loader2 className="size-3 animate-spin text-blue-600" />
-                            {job.progress}%
-                          </span>
+                          /* Failed State */
+                          <div className="size-full flex flex-col items-center justify-center p-4 text-center bg-rose-950/40 relative">
+                            <div className="absolute top-2.5 left-2.5 z-10">
+                              <span className="px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-md text-white text-[11px] font-mono font-bold border border-white/10">
+                                #{index + 1}
+                              </span>
+                            </div>
+                            <div className="absolute top-2.5 right-2.5 z-10">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-600 backdrop-blur-md text-white text-[11px] font-semibold shadow-sm">
+                                <XCircle className="size-3" />
+                                失败
+                              </span>
+                            </div>
+                            <XCircle className="size-8 text-rose-400 mb-2" />
+                            <span className="text-xs text-rose-300 max-w-[85%] line-clamp-2">
+                              {job.error || "生成失败"}
+                            </span>
+                          </div>
                         )}
                       </div>
 
-                      {/* Progress bar */}
-                      <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-                        <div
-                          className={cn(
-                            "h-full rounded-full transition-all duration-300",
-                            failed
-                              ? "bg-rose-500"
-                              : done
-                                ? "bg-emerald-500"
-                                : "bg-blue-600"
-                          )}
-                          style={{ width: `${job.progress}%` }}
-                        />
-                      </div>
-
-                      {/* Status Info */}
-                      <p className="text-[12px] text-slate-500 dark:text-slate-400 line-clamp-1 mb-2.5">
-                        {failed
-                          ? job.error || "生成失败"
-                          : active
-                            ? job.message || "正在智能剪辑中…"
-                            : done
-                              ? `时长：${job.duration ? `${Math.round(job.duration)} 秒` : "标准"} · 9:16 竖版高清`
-                              : job.message}
-                      </p>
-
-                      {/* Done state: Quick Video Preview Banner & Companion Covers */}
-                      {done && job.output_url ? (
-                        <div className="flex flex-col gap-2.5">
-                          {/* Video Quick Preview Card Banner */}
-                          <div
-                            onClick={() => handleOpenVideoPreview(job.id)}
-                            className="group relative flex h-20 w-full items-center justify-between px-3.5 rounded-xl bg-gradient-to-r from-slate-900 to-slate-800 text-white cursor-pointer overflow-hidden shadow-xs hover:ring-2 hover:ring-blue-500 transition-all"
-                            title="点击播放预览视频"
-                          >
-                            <div className="flex items-center gap-3 z-10">
-                              <div className="flex size-10 items-center justify-center rounded-full bg-blue-600 text-white shadow-md transition-transform group-hover:scale-110">
-                                <CirclePlay className="size-5" />
-                              </div>
-                              <div className="flex flex-col">
-                                <span className="text-xs font-bold text-white group-hover:text-blue-300 transition-colors flex items-center gap-1">
-                                  点击预览视频
-                                  <span className="text-[10px] text-blue-400 font-normal">▶ 播放</span>
-                                </span>
-                                <span className="text-[10px] text-slate-400 mt-0.5">
-                                  {job.duration ? `${Math.round(job.duration)}秒` : "就绪"} · 点击大屏预览
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="z-10 flex items-center gap-1 text-[11px] text-blue-300 group-hover:text-white font-medium bg-white/10 px-2 py-1 rounded-lg backdrop-blur-xs">
-                              <Film className="size-3.5" />
-                              <span>查看成片</span>
-                            </div>
-
-                            <div className="absolute right-0 top-0 h-full w-24 bg-gradient-to-l from-blue-600/20 to-transparent pointer-events-none" />
+                      {/* 2. Card Content Body */}
+                      <div className="p-4 flex flex-col gap-3">
+                        {/* Title & Headline Hook */}
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate" title={groupName}>
+                              {groupName}
+                            </h4>
+                            {done && job.duration ? (
+                              <span className="text-xs font-mono font-medium text-slate-400 shrink-0">
+                                {Math.round(job.duration)} 秒
+                              </span>
+                            ) : null}
                           </div>
+                          {job.headline ? (
+                            <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-1 flex items-center gap-1" title={job.headline}>
+                              <Sparkles className="size-3 text-blue-500 shrink-0" />
+                              <span className="truncate">「{job.headline}」</span>
+                            </p>
+                          ) : done ? (
+                            <p className="text-xs text-slate-400 dark:text-slate-500 truncate">
+                              AI 智能分镜剪辑 · 智能字幕 · BGM 自动适配
+                            </p>
+                          ) : null}
+                        </div>
 
-                          {/* Companion Covers Section */}
-                          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-1.5">
+                        {/* Companion Covers Strip */}
+                        {done && (
+                          <div>
                             {coversList.length > 0 ? (
-                              <div className="flex flex-col gap-1.5">
+                              <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-2.5 flex flex-col gap-2">
                                 <div className="flex items-center justify-between text-[11px]">
                                   <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1">
                                     <Sparkles className="size-3 text-amber-500" />
-                                    配套封面 ({coversList.length}张)
+                                    配套封面 ({coversList.length} 张)
                                   </span>
                                   <button
                                     type="button"
@@ -1955,20 +2019,22 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                                       e.stopPropagation()
                                       void handleGenerateCoversForJob(job.id)
                                     }}
-                                    className="text-blue-600 hover:text-blue-700 dark:text-blue-400 font-medium cursor-pointer flex items-center gap-1"
+                                    className="text-blue-600 hover:text-blue-700 dark:text-blue-400 font-medium cursor-pointer flex items-center gap-1 transition-colors disabled:opacity-50"
                                   >
                                     {isCoverLoading ? (
                                       <Loader2 className="size-3 animate-spin text-blue-600" />
-                                    ) : null}
-                                    重新生成 3 张封面
+                                    ) : (
+                                      <RefreshCw className="size-2.5" />
+                                    )}
+                                    <span className="whitespace-nowrap">换一组</span>
                                   </button>
                                 </div>
 
-                                {/* 3 Thumbnails with ZoomIn */}
-                                <div className="grid grid-cols-3 gap-2 py-0.5">
-                                  {coversList.map((c, idx) => (
+                                {/* 3 mini cover cards */}
+                                <div className="grid grid-cols-3 gap-2">
+                                  {coversList.map((cover, idx) => (
                                     <div
-                                      key={c.id || idx}
+                                      key={cover.id || idx}
                                       onClick={(e) => {
                                         e.stopPropagation()
                                         handleOpenPreview(
@@ -1976,19 +2042,18 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                                           idx
                                         )
                                       }}
-                                      className="group relative aspect-[9/16] w-full rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-950 cursor-pointer shadow-2xs hover:ring-2 hover:ring-blue-500 transition-all"
-                                      title={c.headline ? `【${c.headline}】· 点击放大预览封面` : "点击放大预览封面"}
+                                      className="group/cov relative aspect-[9/16] w-full rounded-lg overflow-hidden border border-slate-200/80 dark:border-slate-700 bg-black cursor-pointer shadow-2xs hover:ring-2 hover:ring-blue-500 transition-all"
+                                      title={cover.headline ? `【${cover.headline}】· 点击放大预览` : "点击放大预览封面"}
                                     >
                                       <img
-                                        src={c.url}
+                                        src={cover.url}
                                         alt={`封面 #${idx + 1}`}
-                                        className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                        className="size-full object-cover transition-transform duration-300 group-hover/cov:scale-105"
                                       />
-                                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white gap-0.5 backdrop-blur-2xs">
-                                        <ZoomIn className="size-4" />
-                                        <span className="text-[9px] font-bold">放大</span>
+                                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/cov:opacity-100 transition-opacity flex items-center justify-center text-white backdrop-blur-2xs">
+                                        <ZoomIn className="size-3.5" />
                                       </div>
-                                      <span className="absolute bottom-1 right-1 px-1 py-0.2 rounded bg-black/60 text-white text-[8px] font-mono font-medium">
+                                      <span className="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/70 text-white text-[8px] font-mono font-medium">
                                         #{idx + 1}
                                       </span>
                                     </div>
@@ -2003,46 +2068,47 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                                   e.stopPropagation()
                                   void handleGenerateCoversForJob(job.id)
                                 }}
-                                className="w-full py-2 px-2.5 rounded-xl border border-dashed border-amber-300 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-amber-100/80 transition-all cursor-pointer"
+                                className="w-full h-8 rounded-xl border border-dashed border-amber-300 dark:border-amber-700/60 bg-amber-50/50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300 text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-amber-100/70 dark:hover:bg-amber-900/30 transition-all cursor-pointer disabled:opacity-50"
                               >
                                 {isCoverLoading ? (
-                                  <Loader2 className="size-3.5 animate-spin text-amber-600" />
+                                  <Loader2 className="size-3 animate-spin text-amber-600" />
                                 ) : (
                                   <Sparkles className="size-3.5 text-amber-500" />
                                 )}
-                                {isCoverLoading ? "正在生成 3 张封面…" : "✨ 为本片生成配套爆款封面"}
+                                <span>{isCoverLoading ? "正在生成封面…" : "✨ 一键生成 3 张配套爆款封面"}</span>
                               </button>
                             )}
                           </div>
-                        </div>
-                      ) : null}
+                        )}
+                      </div>
                     </div>
 
-                    {/* Bottom Action Footer on each card */}
+                    {/* 3. Card Action Footer */}
                     {done && job.output_url ? (
-                      <div className="flex items-center gap-2 pt-3 mt-3 border-t border-slate-100 dark:border-slate-800">
+                      <div className="flex items-center gap-2 p-4 pt-0">
                         <Button
                           type="button"
                           size="sm"
+                          variant="outline"
                           onClick={(e) => {
                             e.stopPropagation()
                             handleOpenVideoPreview(job.id)
                           }}
-                          className="flex-1 h-8 rounded-xl bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-600 dark:text-blue-400 font-semibold text-xs border border-blue-200/80 dark:border-blue-900/80 cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
+                          className="flex-1 h-8 rounded-xl bg-blue-50/70 hover:bg-blue-100/80 dark:bg-blue-950/40 dark:hover:bg-blue-900/60 text-blue-600 dark:text-blue-400 font-semibold text-xs border border-blue-200/80 dark:border-blue-900/60 cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs whitespace-nowrap"
                         >
                           <CirclePlay className="size-3.5" />
-                          预览视频
+                          <span>大屏预览</span>
                         </Button>
 
                         <a
                           href={`/api/jobs/${job.id}/download`}
                           download
                           onClick={(e) => e.stopPropagation()}
-                          className="h-8 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium text-xs flex items-center gap-1 transition-colors cursor-pointer"
-                          title="下载成片视频 MP4"
+                          className="h-8 px-3 rounded-xl bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 whitespace-nowrap shadow-2xs"
+                          title="下载 MP4 视频文件"
                         >
                           <Download className="size-3.5" />
-                          下载
+                          <span>下载 MP4</span>
                         </a>
                       </div>
                     ) : null}
