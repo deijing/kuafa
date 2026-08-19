@@ -1641,7 +1641,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
 
         {/* Batch Generated Cards Grid Header & List */}
         {batchSessions.length > 0 ? (
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-4 max-w-[1020px]">
             {/* Browser-style Batch Tabs Bar (像浏览器标签页一样的批次导航，支持横向鼠标滚轮、左右翻页按钮与触控滑动) */}
             <div className="flex items-center gap-1.5 bg-slate-100/90 dark:bg-slate-800/90 border border-slate-200/80 dark:border-slate-700/80 rounded-2xl p-1.5 shadow-2xs backdrop-blur-md">
               {/* 向左微调滚动按钮 */}
@@ -1828,8 +1828,8 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
               </div>
             </div>
 
-            {/* Cards Grid: Modern, breathable, responsive video showcase grid */}
-            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4">
+            {/* Cards Grid: 2-column showcase layout for balanced, breathable viewing */}
+            <div className="grid gap-5 grid-cols-1 md:grid-cols-2">
               {displayedJobs.map((job, index) => {
                 const done = job.status === "succeeded"
                 const active = job.status === "queued" || job.status === "running"
@@ -2068,10 +2068,10 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                                   e.stopPropagation()
                                   void handleGenerateCoversForJob(job.id)
                                 }}
-                                className="w-full h-8 rounded-xl border border-dashed border-amber-300 dark:border-amber-700/60 bg-amber-50/50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300 text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-amber-100/70 dark:hover:bg-amber-900/30 transition-all cursor-pointer disabled:opacity-50"
+                                className="w-full h-8.5 rounded-xl border border-dashed border-amber-300 dark:border-amber-700/60 bg-amber-50/50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300 text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-amber-100/70 dark:hover:bg-amber-900/30 transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap"
                               >
                                 {isCoverLoading ? (
-                                  <Loader2 className="size-3 animate-spin text-amber-600" />
+                                  <Loader2 className="size-3.5 animate-spin text-amber-600" />
                                 ) : (
                                   <Sparkles className="size-3.5 text-amber-500" />
                                 )}
@@ -2085,7 +2085,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
 
                     {/* 3. Card Action Footer */}
                     {done && job.output_url ? (
-                      <div className="flex items-center gap-2 p-4 pt-0">
+                      <div className="flex items-center gap-2.5 p-4 pt-0">
                         <Button
                           type="button"
                           size="sm"
@@ -2094,7 +2094,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                             e.stopPropagation()
                             handleOpenVideoPreview(job.id)
                           }}
-                          className="flex-1 h-8 rounded-xl bg-blue-50/70 hover:bg-blue-100/80 dark:bg-blue-950/40 dark:hover:bg-blue-900/60 text-blue-600 dark:text-blue-400 font-semibold text-xs border border-blue-200/80 dark:border-blue-900/60 cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs whitespace-nowrap"
+                          className="flex-1 h-8.5 rounded-xl bg-blue-50/70 hover:bg-blue-100/80 dark:bg-blue-950/40 dark:hover:bg-blue-900/60 text-blue-600 dark:text-blue-400 font-semibold text-xs border border-blue-200/80 dark:border-blue-900/60 cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs whitespace-nowrap"
                         >
                           <CirclePlay className="size-3.5" />
                           <span>大屏预览</span>
@@ -2104,7 +2104,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                           href={`/api/jobs/${job.id}/download`}
                           download
                           onClick={(e) => e.stopPropagation()}
-                          className="h-8 px-3 rounded-xl bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 whitespace-nowrap shadow-2xs"
+                          className="flex-1 h-8.5 px-3 rounded-xl bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shadow-2xs"
                           title="下载 MP4 视频文件"
                         >
                           <Download className="size-3.5" />
