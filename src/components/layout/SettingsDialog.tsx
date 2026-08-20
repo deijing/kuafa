@@ -2,9 +2,13 @@ import { useEffect, useState } from "react"
 import {
   CheckCircle2,
   CircleAlert,
+  Cloud,
+  Cpu,
   ExternalLink,
+  HardDrive,
   History,
   ImageIcon,
+  Mic,
   RefreshCw,
   Settings,
   Sparkles,
@@ -52,11 +56,14 @@ import {
   fetchOpenAIModels,
   testCatsAPIConnection,
   testOpenAIConnection,
+  testTranscriptionConnection,
   updateApiSecrets,
   type ApiSecrets,
   type CatsAPITestResult,
   type OpenAITestResult,
   type ReasoningEffort,
+  type TranscriptionEngine,
+  type TranscriptionTestResult,
 } from "@/lib/api"
 
 const REASONING_EFFORTS: {
@@ -69,6 +76,18 @@ const REASONING_EFFORTS: {
     { value: "high", label: "high" },
     { value: "xhigh", label: "xhigh" },
     { value: "max", label: "max" },
+  ]
+
+const LOCAL_WHISPER_MODELS: {
+  value: string
+  label: string
+  desc: string
+}[] = [
+    { value: "tiny", label: "tiny · 极速轻量 (~75MB)", desc: "极速秒转 · 适合快速初剪与低配设备" },
+    { value: "base", label: "base · 均衡推荐 (~140MB)", desc: "速度与精度兼顾 · 默认推荐" },
+    { value: "small", label: "small · 高精增强 (~460MB)", desc: "复杂口音与嘈杂背景识别更准" },
+    { value: "medium", label: "medium · 专业进阶 (~1.5GB)", desc: "专业高精度输出" },
+    { value: "large-v3", label: "large-v3 · 旗舰顶配 (~3GB)", desc: "最高准确率与完整语义" },
   ]
 
 function normalizeEffort(raw: string | null | undefined): ReasoningEffort {
@@ -94,6 +113,15 @@ export function SettingsDialog() {
   const [ok, setOk] = useState<string | null>(null)
   const [status, setStatus] = useState<ApiSecrets | null>(null)
 
+  // 语音转译 ASR 模式
+  const [transcriptionEngine, setTranscriptionEngine] =
+    useState<TranscriptionEngine>("local")
+  const [localWhisperModel, setLocalWhisperModel] = useState("base")
+  const [testingTranscription, setTestingTranscription] = useState(false)
+  const [transcriptionTestResult, setTranscriptionTestResult] =
+    useState<TranscriptionTestResult | null>(null)
+
+  // 封面与 LLM 密钥
   const [catsapiKey, setCatsapiKey] = useState("")
   const [catsapiBase, setCatsapiBase] = useState("")
   const [openaiKey, setOpenaiKey] = useState("")
@@ -119,6 +147,7 @@ export function SettingsDialog() {
       setOk(null)
       setTestResult(null)
       setCatsapiTestResult(null)
+      setTranscriptionTestResult(null)
       setModelOptions([])
       setModelsFetched(false)
       setCatsapiKey("")
@@ -126,6 +155,8 @@ export function SettingsDialog() {
       void fetchApiSecrets()
         .then((data) => {
           setStatus(data)
+          setTranscriptionEngine(data.transcription_engine || "local")
+          setLocalWhisperModel(data.local_whisper_model || "base")
           setCatsapiBase(data.catsapi_base)
           setOpenaiBase(data.openai_base_url)
           setOpenaiModel(data.openai_model)
@@ -152,6 +183,29 @@ export function SettingsDialog() {
       base_url: openaiBase.trim() || null,
       model: openaiModel.trim() || null,
       reasoning_effort: reasoningEffort,
+    }
+  }
+
+  async function onTestTranscription() {
+    setTestingTranscription(true)
+    setError(null)
+    setOk(null)
+    setTranscriptionTestResult(null)
+    try {
+      const result = await testTranscriptionConnection({
+        engine: transcriptionEngine,
+        model: localWhisperModel,
+      })
+      setTranscriptionTestResult(result)
+      if (result.ok) {
+        setOk(result.message)
+      } else {
+        setError(result.message)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "测试转译服务失败")
+    } finally {
+      setTestingTranscription(false)
     }
   }
 
@@ -228,6 +282,8 @@ export function SettingsDialog() {
     setOk(null)
     try {
       const payload: Parameters<typeof updateApiSecrets>[0] = {
+        transcription_engine: transcriptionEngine,
+        local_whisper_model: localWhisperModel,
         catsapi_base: catsapiBase.trim() || null,
         openai_base_url: openaiBase.trim() || null,
         openai_model: openaiModel.trim() || null,
@@ -238,13 +294,15 @@ export function SettingsDialog() {
 
       const next = await updateApiSecrets(payload)
       setStatus(next)
+      setTranscriptionEngine(next.transcription_engine || "local")
+      setLocalWhisperModel(next.local_whisper_model || "base")
       setCatsapiKey("")
       setOpenaiKey("")
       setCatsapiBase(next.catsapi_base)
       setOpenaiBase(next.openai_base_url)
       setOpenaiModel(next.openai_model)
       setReasoningEffort(normalizeEffort(next.openai_reasoning_effort))
-      setOk("密钥配置已保存")
+      setOk("设置配置已成功保存")
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存失败")
     } finally {
@@ -286,13 +344,13 @@ export function SettingsDialog() {
         </Button>
       </DialogTrigger>
 
-      <DialogContent className="flex max-h-[92vh] w-[min(1080px,94vw)] max-w-none flex-col gap-0 overflow-hidden p-0 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-2xl bg-white dark:bg-slate-950 sm:max-w-none">
+      <DialogContent className="flex max-h-[92vh] w-[min(1240px,96vw)] max-w-none flex-col gap-0 overflow-hidden p-0 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-2xl bg-white dark:bg-slate-950 sm:max-w-none">
         <DialogHeader className="gap-1 px-7 py-4 text-left border-b border-slate-100 dark:border-slate-800/60 bg-white dark:bg-slate-950">
           <DialogTitle className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-            API 密钥设置
+            系统与模型设置
           </DialogTitle>
           <DialogDescription className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-            配置封面生图与处理服务密钥。支持自定义 OpenAI 兼容网关；密钥仅保存在本机。
+            配置字幕语音转译模式（本地 Whisper 离线 / 云端必剪 ASR）、封面生图与带货话术服务；支持一键快速切换，配置仅保存在本机。
           </DialogDescription>
         </DialogHeader>
 
@@ -304,7 +362,190 @@ export function SettingsDialog() {
             </div>
           ) : (
             <div className="flex flex-col gap-4 pb-2">
-              <div className="grid grid-cols-1 items-stretch gap-5 md:grid-cols-2">
+              <div className="grid grid-cols-1 items-stretch gap-4.5 lg:grid-cols-3">
+                {/* 语音转译字幕 Card */}
+                <Card className="h-full border border-slate-200/60 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-[0_4px_20px_rgba(0,0,0,0.03)] rounded-2xl transition-all duration-200 flex flex-col p-0 overflow-hidden">
+                  <CardHeader className="gap-1 p-4 pb-2.5 border-b border-slate-100/80 dark:border-slate-800/60">
+                    <div className="flex items-center justify-between gap-2">
+                      <CardTitle className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
+                        <div className="flex size-7 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                          <Mic className="size-4 shrink-0" />
+                        </div>
+                        <span className="truncate">语音转译 · ASR 字幕</span>
+                      </CardTitle>
+                      {transcriptionEngine === "local" ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400 border border-blue-200/60 dark:border-blue-800/40 shrink-0">
+                          <span className="size-1.5 rounded-full bg-blue-500" />
+                          本地离线
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-400 border border-purple-200/60 dark:border-purple-800/40 shrink-0">
+                          <span className="size-1.5 rounded-full bg-purple-500" />
+                          云端必剪
+                        </span>
+                      )}
+                    </div>
+                    <CardDescription className="text-xs text-slate-500 dark:text-slate-400 truncate leading-relaxed">
+                      原声口播识别与断句。当前：
+                      <span className="font-mono text-slate-700 dark:text-slate-300 ml-1">
+                        {transcriptionEngine === "local"
+                          ? `本地 Whisper (${localWhisperModel})`
+                          : "云端必剪 ASR"}
+                      </span>
+                    </CardDescription>
+                  </CardHeader>
+
+                  <CardContent className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                    <FieldGroup className="gap-3">
+                      {/* 模式选择 Toggle */}
+                      <Field>
+                        <FieldLabel className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5 block">
+                          转译引擎模式
+                        </FieldLabel>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTranscriptionEngine("local")
+                              setTranscriptionTestResult(null)
+                            }}
+                            className={cn(
+                              "flex flex-col items-start p-2.5 rounded-xl border text-left transition-all cursor-pointer select-none",
+                              transcriptionEngine === "local"
+                                ? "border-blue-500/80 bg-blue-50/70 dark:bg-blue-950/40 text-blue-950 dark:text-blue-100 shadow-2xs ring-2 ring-blue-500/20"
+                                : "border-slate-200/80 dark:border-slate-700/80 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-600"
+                            )}
+                          >
+                            <div className="flex items-center gap-1.5 font-semibold text-xs mb-0.5">
+                              <HardDrive className="size-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
+                              <span>本地转译</span>
+                            </div>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
+                              离线 / 免网络 / 零费用
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTranscriptionEngine("bcut")
+                              setTranscriptionTestResult(null)
+                            }}
+                            className={cn(
+                              "flex flex-col items-start p-2.5 rounded-xl border text-left transition-all cursor-pointer select-none",
+                              transcriptionEngine === "bcut"
+                                ? "border-purple-500/80 bg-purple-50/70 dark:bg-purple-950/40 text-purple-950 dark:text-purple-100 shadow-2xs ring-2 ring-purple-500/20"
+                                : "border-slate-200/80 dark:border-slate-700/80 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-600"
+                            )}
+                          >
+                            <div className="flex items-center gap-1.5 font-semibold text-xs mb-0.5">
+                              <Cloud className="size-3.5 text-purple-600 dark:text-purple-400 shrink-0" />
+                              <span>必剪云端</span>
+                            </div>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
+                              极速出字 / 免占算力
+                            </span>
+                          </button>
+                        </div>
+                      </Field>
+
+                      {/* 本地模型选择或云端提示 */}
+                      {transcriptionEngine === "local" ? (
+                        <>
+                          <Field>
+                            <FieldLabel htmlFor="whisper-model" className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
+                              本地 Whisper 模型
+                            </FieldLabel>
+                            <Select
+                              value={localWhisperModel}
+                              onValueChange={(v) => {
+                                if (v) {
+                                  setLocalWhisperModel(v)
+                                  setTranscriptionTestResult(null)
+                                }
+                              }}
+                            >
+                              <SelectTrigger id="whisper-model" className={cn(inputStyle, "w-full flex items-center justify-between")}>
+                                <SelectValue placeholder="选择模型规格" />
+                              </SelectTrigger>
+                              <SelectContent className="rounded-xl border-slate-200 dark:border-slate-800 shadow-lg">
+                                <SelectGroup>
+                                  {LOCAL_WHISPER_MODELS.map((m) => (
+                                    <SelectItem key={m.value} value={m.value} className="text-xs rounded-lg">
+                                      <div className="flex flex-col text-left">
+                                        <span className="font-medium">{m.label}</span>
+                                        <span className="text-[10px] text-slate-400">{m.desc}</span>
+                                      </div>
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                          </Field>
+
+                          <div className="rounded-xl bg-slate-100/80 dark:bg-slate-800/60 p-2.5 border border-slate-200/60 dark:border-slate-700/60 flex items-start gap-2 text-[11px] text-slate-600 dark:text-slate-400">
+                            <Cpu className="size-3.5 text-slate-500 mt-0.5 shrink-0" />
+                            <div className="leading-relaxed">
+                              <span className="font-medium text-slate-800 dark:text-slate-200">Faster-Whisper CTranslate2 加速</span>
+                              <p className="text-[10px] text-slate-500 mt-0.5">
+                                int8 量化推理，自动利用 CPU 多核 / Apple Silicon 并行，速度快且低内存占用。
+                              </p>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="rounded-xl bg-purple-50/50 dark:bg-purple-950/20 p-2.5 border border-purple-100 dark:border-purple-900/40 flex items-start gap-2 text-[11px] text-slate-600 dark:text-slate-400">
+                          <Cloud className="size-3.5 text-purple-500 mt-0.5 shrink-0" />
+                          <div className="leading-relaxed">
+                            <span className="font-medium text-purple-900 dark:text-purple-200">必剪云端直连服务</span>
+                            <p className="text-[10px] text-slate-500 mt-0.5">
+                              由必剪 ASR 云端集群识别，无需下载离线模型。若受网络环境或代理阻断可随时切回本地转译。
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 测试按钮 */}
+                      <div className="flex flex-wrap items-center gap-2.5 pt-0.5">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 transition-colors shadow-2xs cursor-pointer"
+                          disabled={saving || testingTranscription}
+                          onClick={() => void onTestTranscription()}
+                        >
+                          {testingTranscription ? (
+                            <Spinner data-icon="inline-start" />
+                          ) : (
+                            <Zap className="size-3.5 text-slate-500 mr-1" />
+                          )}
+                          测试转译
+                        </Button>
+                        {transcriptionTestResult ? (
+                          transcriptionTestResult.ok ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-mono font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700">
+                              <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              正常{transcriptionTestResult.latency_ms != null ? ` · ${transcriptionTestResult.latency_ms}ms` : ""}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-mono font-medium bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400 border border-rose-200/60 dark:border-rose-800/40">
+                              <span className="size-1.5 rounded-full bg-rose-500" />
+                              异常
+                            </span>
+                          )
+                        ) : null}
+                      </div>
+                    </FieldGroup>
+                  </CardContent>
+
+                  <CardFooter className="px-4 py-2.5 mt-auto flex items-center justify-between border-t border-slate-100 dark:border-slate-800/60 bg-slate-50/40 dark:bg-slate-900/40">
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      {transcriptionEngine === "local" ? "离线模型就绪" : "云端接口直连"}
+                    </span>
+                  </CardFooter>
+                </Card>
+
                 {/* 封面生成 Card */}
                 <Card className="h-full border border-slate-200/60 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-[0_4px_20px_rgba(0,0,0,0.03)] rounded-2xl transition-all duration-200 flex flex-col p-0 overflow-hidden">
                   <CardHeader className="gap-1 p-4 pb-2.5 border-b border-slate-100/80 dark:border-slate-800/60">

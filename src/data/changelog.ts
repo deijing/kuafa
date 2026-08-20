@@ -15,16 +15,42 @@ export type ChangelogItem = {
   }[]
 }
 
-export const APP_VERSION = "v1.5.1"
+export const APP_VERSION = "v1.6.0"
 export const APP_BUILD_DATE = "2026-08-19"
 
 export const CHANGELOG_DATA: ChangelogItem[] = [
+  {
+    version: "v1.6.0",
+    date: "2026-08-19",
+    title: "双模 ASR 字幕转译引擎 · 本地 Faster-Whisper 离线转写与云端必剪自由切换",
+    tag: "🚀 重点迭代",
+    isLatest: true,
+    highlights: [
+      "🔒 本地 Faster-Whisper 离线转写：集成 CTranslate2 int8 加速，免联网、100% 隐私安全、无任何外部调用限制与费用",
+      "☁️ 云端必剪 ASR 高速转写：保留必剪云端直连模式，免占用本地算力，极速输出带货口播字幕",
+      "⚙️ 设置面板自由切换与规格调节：支持一键切换本地/云端模式，本地支持 tiny / base / small / medium / large-v3 模型与实时测速",
+    ],
+    details: [
+      {
+        type: "feature",
+        text: "本地 Faster-Whisper 离线转译引擎：内置高效 CTranslate2 推理架构与 int8 量化加速，自动适配 CPU 多核与 Apple Silicon 硬件加速，支持中文精准识别与语音活动检测（VAD Filter），彻底解决离线与网络受限环境下的口播识别需求。",
+      },
+      {
+        type: "feature",
+        text: "双模转译设置与一键切换：在设置中提供「本地离线转译」与「云端必剪转译」双模切换，支持多档本地模型规格选择与一键连通性/延迟测试，配置永久保存至本机。",
+      },
+      {
+        type: "perf",
+        text: "模型内存常驻与引擎缓存优化：实现本地 Whisper 实例智能单例与线程安全管理，避免多片段重复加载模型权重；转写缓存按引擎与模型独立归档，切换模式无缝即时生效。",
+      },
+    ],
+  },
   {
     version: "v1.5.1",
     date: "2026-08-19",
     title: "消息提醒层级隔离修复 · 批量工作台卡片交互与视觉优化",
     tag: "🎨 视觉重构",
-    isLatest: true,
+    isLatest: false,
     highlights: [
       "🛡️ 消息提醒与弹层层级（z-index）彻底隔离：主视图引入 isolate 独立堆叠上下文，杜绝弹窗被 Sticky 栏与卡片穿透",
       "🖼️ 批量成片卡片体验升级：重构配套封面缩略图布局与快捷放大预览交互，视觉更轻盈规整",

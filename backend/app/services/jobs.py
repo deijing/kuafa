@@ -275,16 +275,23 @@ class JobManager:
                 )
 
             if req.mode == "sell":
-                on_progress(3, "必剪 ASR 转写中（自然停顿断句，保持语意完整）…")
+                engine = get_secret("transcription_engine", settings.transcription_engine or "local")
+                local_model = get_secret("local_whisper_model", settings.local_whisper_model or "base")
+                engine_label = f"本地 Whisper ({local_model})" if engine == "local" else "云端必剪 ASR"
+                on_progress(3, f"{engine_label} 语音转写中（自然停顿断句，保持语意完整）…")
                 transcribed = []
                 total = len(materials)
                 for idx, m in enumerate(materials):
                     on_progress(
                         3 + int(25 * idx / max(total, 1)),
-                        f"转写素材 {idx + 1}/{total}…",
+                        f"[{engine_label}] 转写素材 {idx + 1}/{total}…",
                     )
                     try:
-                        segs = transcribe_video(Path(m.path), engine="bcut")
+                        segs = transcribe_video(
+                            Path(m.path),
+                            engine=engine,
+                            model_size=local_model,
+                        )
                     except TranscriptionError as exc:
                         self._update(
                             job_id,
@@ -295,8 +302,8 @@ class JobManager:
 
                 if not any(segs for _, segs in transcribed):
                     raise TranscriptionError(
-                        "全部素材转写失败。默认使用必剪 ASR（bcut-asr 修复版）；"
-                        "也可在设置中配置 OpenAI 兼容密钥作为 Whisper 回退"
+                        f"全部素材转写失败（当前模式：{engine_label}）。"
+                        "请在右上角设置中切换「本地转译」或「云端必剪转译」模式后重试。"
                     )
 
                 on_progress(32, "智能构建连贯话术段落（开场抓人→卖点种草→破价逼单）…")

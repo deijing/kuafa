@@ -386,6 +386,8 @@ export function clearCoverJobs() {
 }
 
 
+export type TranscriptionEngine = "local" | "bcut"
+
 export type ApiSecrets = {
   catsapi_key_set: boolean
   catsapi_key_masked: string | null
@@ -395,6 +397,8 @@ export type ApiSecrets = {
   openai_base_url: string
   openai_model: string
   openai_reasoning_effort: ReasoningEffort
+  transcription_engine: TranscriptionEngine
+  local_whisper_model: string
 }
 
 export type ReasoningEffort =
@@ -412,6 +416,22 @@ export type UpdateApiSecretsPayload = {
   openai_base_url?: string | null
   openai_model?: string | null
   openai_reasoning_effort?: ReasoningEffort | null
+  transcription_engine?: TranscriptionEngine | null
+  local_whisper_model?: string | null
+}
+
+export type TranscriptionTestPayload = {
+  engine?: TranscriptionEngine | null
+  model?: string | null
+}
+
+export type TranscriptionTestResult = {
+  ok: boolean
+  engine: string
+  message: string
+  latency_ms: number | null
+  model: string | null
+  preview_text: string | null
 }
 
 export function fetchApiSecrets() {
@@ -421,6 +441,14 @@ export function fetchApiSecrets() {
 export function updateApiSecrets(payload: UpdateApiSecretsPayload) {
   return request<ApiSecrets>("/api/settings/secrets", {
     method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function testTranscriptionConnection(payload: TranscriptionTestPayload) {
+  return request<TranscriptionTestResult>("/api/settings/transcription/test", {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })

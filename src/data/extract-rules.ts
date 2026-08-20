@@ -19,6 +19,6 @@ export const extractRules: {
   {
     id: "silence",
     label: "去除无声/冗长卡顿片段",
-    checked: false,
+    checked: true,
   },
 ]

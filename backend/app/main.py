@@ -52,6 +52,8 @@ from app.models import (
     OpenAITestOut,
     RenameBgmRequest,
     RenameGroupRequest,
+    TranscriptionTestOut,
+    TranscriptionTestRequest,
     UpdateApiSecretsRequest,
     UpdateLibrarySettingsRequest,
 )
@@ -82,6 +84,7 @@ from app.services.ffmpeg_pipeline import (
 )
 from app.services.openai_client import OpenAICompatError, list_models, test_connection
 from app.services.secrets import secrets_status, update_secrets
+from app.services.transcription import test_transcription_engine
 
 
 ensure_dirs()
@@ -389,6 +392,26 @@ def check_environment() -> EnvCheckResult:
             "status": "warn",
             "message": "未配置 CatsAPI 密钥（暂无法使用 GPT Image 2 生成爆款封面大字报）",
             "fix_suggestion": "可在右上角设置中填写 CatsAPI 密钥以激活 GPT Image 2 封面大字报出图",
+        })
+
+    # 7. ASR Engine (本地 Whisper / 云端必剪)
+    asr_engine = sec_status.get("transcription_engine", "local")
+    local_model = sec_status.get("local_whisper_model", "base")
+    if asr_engine == "local":
+        items.append({
+            "id": "asr_engine",
+            "name": "本地 Whisper 离线转译引擎",
+            "status": "pass",
+            "message": f"已启用本地 Whisper [{local_model}] 离线转译（免联网/隐私安全）",
+            "detail": f"模型存储目录: {settings.models_dir.resolve()}",
+        })
+    else:
+        items.append({
+            "id": "asr_engine",
+            "name": "云端必剪 ASR 转译引擎",
+            "status": "pass",
+            "message": "已启用云端必剪 ASR 转写（极速转写/免本地算力消耗）",
+            "detail": "接口服务: member.bilibili.com",
         })
 
     return EnvCheckResult(
@@ -856,3 +879,13 @@ def catsapi_test_connection(req: CatsAPIProbeRequest) -> CatsAPITestOut:
         base_url=req.base_url,
     )
     return CatsAPITestOut(**result)
+
+
+@app.post("/api/settings/transcription/test", response_model=TranscriptionTestOut)
+def api_test_transcription(req: TranscriptionTestRequest) -> TranscriptionTestOut:
+    """测试 ASR 语音转写服务（本地 Whisper 或云端必剪）连通性与识别。"""
+    result = test_transcription_engine(
+        engine=req.engine,
+        model_size=req.model,
+    )
+    return TranscriptionTestOut(**result)

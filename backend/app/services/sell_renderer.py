@@ -93,17 +93,17 @@ def _ts(seconds: float) -> str:
 
 def fuse_adjacent_clips(
     clips: list[EditClip],
-    max_gap: float = 1.0,
+    max_gap: float = 0.35,
 ) -> tuple[list[EditClip], list[EditClip]]:
     """
-    智能将同素材且时间相连的句子融合成连续的大视频切片，
+    智能将同素材且时间极度相连的句子融合成连续的大视频切片（严格限制缝隙 <=0.35s），
     同时返回时间轴完全对齐的 subtitle_clips（用于精准单句字幕烧录）。
-    彻底避免在同素材内部反复做硬切和拼接导致的微卡顿与音爆。
+    彻底避免在同素材内部反复做硬切和拼接导致的微卡顿与音爆，同时严禁将原片停顿死寂空白缝入成片。
     """
     if not clips:
         return [], []
 
-    # 1. 调整相邻句子的边界，平滑消除 ASR 细微切分缝隙（<=1.0s），保证音画完全连续且字幕不漂移
+    # 1. 调整相邻句子的边界，平滑消除 ASR 极细微切分缝隙（<=0.35s），保证音画完全连续且字幕不漂移
     aligned_clips: list[EditClip] = []
     for i, clip in enumerate(clips):
         start = clip.start
@@ -241,8 +241,8 @@ def render_sell_video(
     work = settings.work_dir / output.stem
     work.mkdir(parents=True, exist_ok=True)
 
-    # 1. 智能相邻片段融合，生成连续的视频切片与对齐的字幕切片
-    video_segments, subtitle_clips = fuse_adjacent_clips(clips, max_gap=1.0)
+    # 1. 智能相邻片段融合，生成连续的视频切片与对齐的字幕切片（严控缝隙 <=0.35s）
+    video_segments, subtitle_clips = fuse_adjacent_clips(clips, max_gap=0.35)
 
     # 2. 动态根据用户选择的画质设置分辨率与 CRF 压缩质量
     vq = (video_quality or "1080p").lower()
@@ -426,8 +426,9 @@ def render_sell_video(
                     "-i",
                     str(bgm_path),
                     "-filter_complex",
+                    f"[0:a]volume=1.0[vocal];"
                     f"[1:a]volume={volume_val:.2f},afade=t=in:st=0:d=1[bg];"
-                    "[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                    "[vocal][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]",
                     "-map",
                     "0:v",
                     "-map",

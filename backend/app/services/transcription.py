@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import threading
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import requests
 
 from app.config import settings
 from app.services.ffmpeg_pipeline import run_cmd
 from app.services.secrets import get_secret
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -62,15 +68,16 @@ _DANGLING_CONNECTIVES = re.compile(
 def merge_to_sentences(
     segments: list[TranscriptSegment],
     *,
-    max_len: float = 12.0,
+    max_len: float = 10.0,
     min_len: float = 0.8,
 ) -> list[TranscriptSegment]:
     """
     智能合并 ASR 细碎片段为完整自然的表达句子：
     1. 依据标点符号（。！？!?；;）硬断句
-    2. 依据说话自然停顿（pause gap >= 0.55s）且语义非残缺时自然断句
-    3. 依据句末收尾词 + 中等停顿断句
-    4. 严格避开「而且/因为/采用/这款」等句中连接词断句，防止话只说一半被切掉
+    2. 依据物理明显停顿（pause gap >= 0.65s）坚决断句，杜绝跨静音贪婪合并产生死寂空白
+    3. 依据中等自然停顿（pause gap >= 0.40s 且 dur >= 1.0s 且非悬空连接词）自然断句
+    4. 依据句末收尾词 + 轻度停顿断句
+    5. 超出时长上限断句
     """
     if not segments:
         return []
@@ -110,17 +117,20 @@ def merge_to_sentences(
         # 1. 缓冲区末尾已有明确结束标点
         if _SENTENCE_END.search(buf_text):
             should_split = True
-        # 2. 明显停顿（>=0.55s）+ 时长足够 + 末尾不是未说完的连接词
-        elif gap >= 0.55 and dur >= 2.0 and not _DANGLING_CONNECTIVES.search(buf_text):
+        # 2. 绝对物理明显停顿（>=0.65s），无论前句长短坚决断句，严防将静音空白包含在句子内部
+        elif gap >= 0.65:
             should_split = True
-        # 3. 中等停顿（>=0.35s）+ 句末语气词 + 时长足够
-        elif gap >= 0.35 and dur >= 2.8 and _PARTICLE_ENDINGS.search(buf_text):
+        # 3. 中等自然停顿（>=0.40s）+ 时长足够（>=1.0s）+ 末尾不是未说完的悬空连接词
+        elif gap >= 0.40 and dur >= 1.0 and not _DANGLING_CONNECTIVES.search(buf_text):
             should_split = True
-        # 4. 超出软上限且当前句子可收尾
+        # 4. 轻度停顿（>=0.25s）+ 句末语气词/收尾词 + 时长足够（>=1.8s）
+        elif gap >= 0.25 and dur >= 1.8 and _PARTICLE_ENDINGS.search(buf_text):
+            should_split = True
+        # 5. 超出软上限且当前句子可收尾
         elif dur >= max_len and not _DANGLING_CONNECTIVES.search(buf_text):
             should_split = True
-        # 5. 绝对硬上限（防止异常长段）
-        elif dur >= max_len + 4.0:
+        # 6. 绝对硬上限（防止异常长段）
+        elif dur >= max_len + 3.0:
             should_split = True
 
         if should_split:
@@ -137,8 +147,72 @@ def merge_to_sentences(
     return sentences
 
 
+_LOCAL_WHISPER_MODELS: dict[str, Any] = {}
+_MODEL_LOCK = threading.Lock()
+
+
+def get_local_whisper_model(model_size: str = "base") -> Any:
+    """获取本地 Whisper 实例（内存缓存，线程安全）。"""
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as exc:
+        raise TranscriptionError("未安装 faster-whisper 依赖，请在终端执行 pip install faster-whisper") from exc
+
+    clean_size = (model_size or "base").strip().lower()
+    if clean_size not in ("tiny", "base", "small", "medium", "large-v3", "large-v2", "large"):
+        clean_size = "base"
+
+    with _MODEL_LOCK:
+        if clean_size in _LOCAL_WHISPER_MODELS:
+            return _LOCAL_WHISPER_MODELS[clean_size]
+
+        models_dir = settings.models_dir
+        models_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info("加载本地 Whisper 模型 [%s] ...", clean_size)
+        model = WhisperModel(
+            clean_size,
+            device="cpu",
+            compute_type="int8",
+            download_root=str(models_dir),
+        )
+        _LOCAL_WHISPER_MODELS[clean_size] = model
+        logger.info("本地 Whisper 模型 [%s] 加载完成", clean_size)
+        return model
+
+
+def transcribe_local(
+    media: Path,
+    *,
+    model_size: str = "base",
+    language: str = "zh",
+) -> list[TranscriptSegment]:
+    """本地 Whisper 离线转写（基于 faster-whisper CTranslate2 引擎）。"""
+    try:
+        model = get_local_whisper_model(model_size)
+        raw_segments, info = model.transcribe(
+            str(media),
+            language=language,
+            beam_size=5,
+            vad_filter=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise TranscriptionError(f"本地 Whisper 转写失败: {exc}") from exc
+
+    segments: list[TranscriptSegment] = []
+    for seg in raw_segments:
+        text = (seg.text or "").strip()
+        if not text:
+            continue
+        start = max(0.0, float(seg.start))
+        end = max(start + 0.15, float(seg.end))
+        segments.append(TranscriptSegment(start=start, end=end, text=text))
+
+    return merge_to_sentences(segments, max_len=10.0, min_len=0.8)
+
+
 def transcribe_bcut(video: Path) -> list[TranscriptSegment]:
-    """主路径：必剪 ASR（社区修复版客户端）。"""
+    """云端必剪 ASR（社区修复版客户端）。"""
     from app.services.bcut_asr_client import recognize_media
 
     try:
@@ -209,20 +283,35 @@ def transcribe_whisper(wav: Path, *, language: str = "zh") -> list[TranscriptSeg
     return merge_to_sentences(segments)
 
 
+def transcribe_material(video: Path) -> list[TranscriptSegment]:
+    """转写素材/成片视频用于提取口播标语或文案。"""
+    return transcribe_video(video)
+
+
 def transcribe_video(
     video: Path,
     *,
     cache_dir: Path | None = None,
-    engine: str = "bcut",
+    engine: str | None = None,
+    model_size: str | None = None,
 ) -> list[TranscriptSegment]:
     """
     转写视频口播。
-    默认 engine=bcut（必剪，免费、中文友好）；失败可回退 whisper。
+    支持两种模式：
+    - local: 本地 Whisper 离线模型转写（免联网，隐私安全）
+    - bcut: 云端必剪 ASR（极速、免下载）
+    若未指定 engine 则读取全局设置 (get_secret('transcription_engine'))。
     """
+    engine = engine or get_secret("transcription_engine", settings.transcription_engine or "local")
+    model_size = model_size or get_secret("local_whisper_model", settings.local_whisper_model or "base")
+
     cache_dir = cache_dir or (settings.data_dir / "transcripts")
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_json = cache_dir / f"{video.stem}.{engine}.json"
+    
+    cache_suffix = f"{engine}.{model_size}" if engine == "local" else engine
+    cache_json = cache_dir / f"{video.stem}.{cache_suffix}.json"
     mtime_ns = video.stat().st_mtime_ns
+
     if cache_json.exists():
         try:
             raw = json.loads(cache_json.read_text(encoding="utf-8"))
@@ -232,33 +321,37 @@ def transcribe_video(
                 and isinstance(raw.get("segments"), list)
             ):
                 return [TranscriptSegment(**item) for item in raw["segments"]]
-            # 兼容旧缓存（无 mtime）：丢弃，强制重转写
-            if isinstance(raw, list):
-                pass
         except (json.JSONDecodeError, TypeError, KeyError):
             pass
 
     errors: list[str] = []
     segs: list[TranscriptSegment] = []
 
-    if engine in ("bcut", "auto"):
+    if engine == "local":
+        try:
+            segs = transcribe_local(video, model_size=model_size)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"local_whisper: {exc}")
+            # 尝试回退必剪或远程 whisper
+            try:
+                segs = transcribe_bcut(video)
+                errors.append("fallback=bcut")
+            except Exception as exc2:  # noqa: BLE001
+                errors.append(f"bcut: {exc2}")
+
+    elif engine == "bcut":
         try:
             segs = transcribe_bcut(video)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"bcut: {exc}")
-            if engine == "bcut":
-                # auto 才回退；纯 bcut 也尝试 whisper 以免整条链路挂死
-                try:
-                    wav = cache_dir / f"{video.stem}.wav"
-                    extract_audio_wav(video, wav)
-                    segs = transcribe_whisper(wav)
-                    errors.append("fallback=whisper")
-                except Exception as exc2:  # noqa: BLE001
-                    raise TranscriptionError(
-                        "；".join(errors + [f"whisper: {exc2}"])
-                    ) from exc2
+            # 尝试回退本地 whisper
+            try:
+                segs = transcribe_local(video, model_size=model_size)
+                errors.append("fallback=local_whisper")
+            except Exception as exc2:  # noqa: BLE001
+                errors.append(f"local_whisper: {exc2}")
 
-    if engine == "whisper" and not segs:
+    elif engine == "whisper":
         wav = cache_dir / f"{video.stem}.wav"
         extract_audio_wav(video, wav)
         segs = transcribe_whisper(wav)
@@ -278,3 +371,80 @@ def transcribe_video(
         encoding="utf-8",
     )
     return segs
+
+
+def test_transcription_engine(
+    engine: str | None = None,
+    model_size: str | None = None,
+) -> dict[str, Any]:
+    """测试 ASR 转译服务连通性与识别速度。"""
+    engine = engine or get_secret("transcription_engine", settings.transcription_engine or "local")
+    model_size = model_size or get_secret("local_whisper_model", settings.local_whisper_model or "base")
+
+    t0 = time.time()
+    # 准备测试音频
+    test_wav = settings.work_dir / "asr_test_sample.wav"
+    test_wav.parent.mkdir(parents=True, exist_ok=True)
+    if not test_wav.exists():
+        # 生成标准测试音频
+        import math
+        import struct
+        import wave
+
+        sample_rate = 16000
+        duration = 1.0  # 1 秒轻音
+        with wave.open(str(test_wav), "w") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            for i in range(int(sample_rate * duration)):
+                value = int(1000.0 * math.sin(2.0 * math.pi * 440.0 * i / sample_rate))
+                wf.writeframes(struct.pack("<h", value))
+
+    try:
+        if engine == "local":
+            model = get_local_whisper_model(model_size)
+            # 使用本地模型进行推理测试
+            segments, info = model.transcribe(str(test_wav), language="zh", vad_filter=False)
+            list(segments)  # 执行生成
+            latency = int((time.time() - t0) * 1000)
+            return {
+                "ok": True,
+                "engine": "local",
+                "model": model_size,
+                "message": f"本地 Whisper [{model_size}] 离线模型运行正常",
+                "latency_ms": latency,
+                "preview_text": "引擎就绪，离线高精度转译可用",
+            }
+        elif engine == "bcut":
+            # 测试必剪接口连通性
+            from app.services.bcut_asr_client import BcutASR
+
+            asr = BcutASR()
+            asr.set_data(file=test_wav)
+            asr.upload()
+            task_id = asr.create_task()
+            latency = int((time.time() - t0) * 1000)
+            return {
+                "ok": True,
+                "engine": "bcut",
+                "model": "cloud-bcut",
+                "message": "云端必剪 ASR 服务连接正常",
+                "latency_ms": latency,
+                "preview_text": f"任务已创建 (TaskID: {task_id[:8]}…)",
+            }
+        else:
+            return {
+                "ok": False,
+                "engine": engine,
+                "message": f"未知转译引擎: {engine}",
+            }
+    except Exception as exc:  # noqa: BLE001
+        latency = int((time.time() - t0) * 1000)
+        return {
+            "ok": False,
+            "engine": engine,
+            "model": model_size,
+            "message": f"转译测试失败: {exc}",
+            "latency_ms": latency,
+        }

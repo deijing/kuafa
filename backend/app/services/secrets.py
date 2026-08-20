@@ -15,6 +15,8 @@ SECRET_KEYS = (
     "openai_base_url",
     "openai_model",
     "openai_reasoning_effort",
+    "transcription_engine",
+    "local_whisper_model",
 )
 
 
@@ -56,6 +58,8 @@ def get_secret(key: str, default: str = "") -> str:
         "openai_base_url": settings.openai_base_url,
         "openai_model": settings.openai_model,
         "openai_reasoning_effort": settings.openai_reasoning_effort,
+        "transcription_engine": settings.transcription_engine,
+        "local_whisper_model": settings.local_whisper_model,
     }
     return (env_map.get(key) or default or "").strip()
 
@@ -72,7 +76,7 @@ def update_secrets(payload: dict[str, str | None]) -> dict[str, Any]:
         value = payload[key]
         if value is None:
             continue
-        text = value.strip()
+        text = str(value).strip()
         if text == "":
             current.pop(key, None)
         else:
@@ -99,6 +103,12 @@ def secrets_status() -> dict[str, Any]:
                 "openai_reasoning_effort",
                 settings.openai_reasoning_effort or "medium",
             )
+        ),
+        "transcription_engine": get_secret(
+            "transcription_engine", settings.transcription_engine or "local"
+        ),
+        "local_whisper_model": get_secret(
+            "local_whisper_model", settings.local_whisper_model or "base"
         ),
     }
 

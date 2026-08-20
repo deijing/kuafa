@@ -22,6 +22,7 @@ backend/data/thumbs/
 backend/data/outputs/
 backend/data/work/
 backend/data/covers/
+backend/data/models/
 backend/data/bgm/*.mp3
 backend/data/bgm/*.wav
 backend/data/bgm/*.m4a

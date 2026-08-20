@@ -50,7 +50,7 @@ class MagicCue:
 class ExtractRules:
     bargain: bool = True  # 保留讲价/逼单
     detail: bool = True  # 保留产品细节特写
-    silence: bool = False  # 去除无声/冗长卡顿
+    silence: bool = True  # 自动去除无声/冗长卡顿与空白空镜
     filter_live_pitch: bool = True  # 自动过滤直播导流口播（1号链接、小黄车、去拍等）
     negative_words: tuple[str, ...] = ()  # 自定义否词列表
 
@@ -68,7 +68,7 @@ class ExtractRules:
         return cls(
             bargain=bool(raw.get("bargain", True)),
             detail=bool(raw.get("detail", True)),
-            silence=bool(raw.get("silence", False)),
+            silence=bool(raw.get("silence", True)),
             filter_live_pitch=bool(flp),
             negative_words=tuple(str(w).strip() for w in negs if str(w).strip()),
         )
@@ -115,12 +115,12 @@ def _is_sparse_or_stalled(seg: TranscriptSegment) -> bool:
     """Heuristic: long window with little speech ≈ 卡顿/无声口播。"""
     text = seg.text.strip()
     dur = max(0.1, seg.end - seg.start)
-    if dur >= 3.5 and len(text) <= 4:
+    if dur >= 3.0 and len(text) <= 4:
         return True
-    # Chinese roughly >= 2 chars/sec when speaking; far below = stall
-    if dur >= 2.5 and (len(text) / dur) < 1.2:
+    # Chinese roughly >= 2 chars/sec when speaking; far below = stall/silence
+    if dur >= 2.0 and (len(text) / dur) < 1.1:
         return True
-    if dur < 0.7:
+    if dur < 0.6:
         return True
     return False
 
@@ -237,7 +237,7 @@ def extract_narrative_blocks(
             acc_dur = seg.end - curr_segs[0].start
 
             # 判定是否需要分段：
-            # 1. 停顿超过 1.8 秒（说话者明显中断或镜头切换）
+            # 1. 停顿超过 1.2 秒（说话者明显中断、展示空镜或换镜头）
             # 2. 段落时长已达上限（通常 15~18s 足够讲完一个完整要点）
             # 3. 当前已积攒足够时长(>=7s)且当前句明确进入价格/逼单环节，而前文是介绍环节
             is_role_shift = False
@@ -246,7 +246,7 @@ def extract_narrative_blocks(
                 if not PRICE_RE.search(prev_text) and PRICE_RE.search(seg.text):
                     is_role_shift = True
 
-            if gap > 1.8 or acc_dur >= max_block_seconds or is_role_shift:
+            if gap > 1.2 or acc_dur >= max_block_seconds or is_role_shift:
                 flush_block()
                 curr_segs.append(seg)
             else:

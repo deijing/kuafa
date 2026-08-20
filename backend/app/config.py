@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     work_dir: Path = _DATA_DIR / "work"
     covers_dir: Path = _DATA_DIR / "covers"
     bgm_dir: Path = _DATA_DIR / "bgm"
+    models_dir: Path = _DATA_DIR / "models"
     db_path: Path = _DATA_DIR / "kuafa.db"
     runtime_config_path: Path = _RUNTIME_CONFIG
 
@@ -38,6 +39,10 @@ class Settings(BaseSettings):
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
     subtitle_font: str = ""
+
+    # 字幕转写模式：local（本地 Whisper 离线识别）| bcut（云端必剪 ASR）
+    transcription_engine: str = "local"
+    local_whisper_model: str = "base"  # tiny | base | small | medium | large-v3
 
     # CatsAPI · GPT Image 2
     catsapi_key: str = ""
@@ -118,5 +123,6 @@ def ensure_dirs() -> None:
         settings.work_dir,
         settings.covers_dir,
         settings.bgm_dir,
+        settings.models_dir,
     ):
         path.mkdir(parents=True, exist_ok=True)

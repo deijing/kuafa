@@ -223,6 +223,9 @@ class ApiSecretsOut(BaseModel):
     openai_model: str
     # OpenAI GPT：none | low | medium | high | xhigh | max
     openai_reasoning_effort: str = "medium"
+    # 字幕转写模式：local（本地 Whisper 离线识别）| bcut（云端必剪 ASR）
+    transcription_engine: Literal["local", "bcut"] = "local"
+    local_whisper_model: str = "base"
 
 
 class UpdateApiSecretsRequest(BaseModel):
@@ -233,6 +236,22 @@ class UpdateApiSecretsRequest(BaseModel):
     openai_base_url: str | None = None
     openai_model: str | None = None
     openai_reasoning_effort: str | None = None
+    transcription_engine: str | None = None
+    local_whisper_model: str | None = None
+
+
+class TranscriptionTestRequest(BaseModel):
+    engine: Literal["local", "bcut"] | None = None
+    model: str | None = None
+
+
+class TranscriptionTestOut(BaseModel):
+    ok: bool
+    engine: str
+    message: str
+    latency_ms: int | None = None
+    model: str | None = None
+    preview_text: str | None = None
 
 
 class OpenAIProbeRequest(BaseModel):
