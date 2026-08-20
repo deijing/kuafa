@@ -242,6 +242,7 @@ class JobManager:
                     extract_rules=req.extract_rules,
                     negative_words=req.negative_words,
                     filter_live_pitch=req.filter_live_pitch,
+                    filter_price=req.filter_price,
                     variant_index=i,
                     clips_per_video=req.clips_per_video,
                     shuffle_clips=req.shuffle_clips,
@@ -311,6 +312,7 @@ class JobManager:
                     req.extract_rules,
                     negative_words=req.negative_words,
                     filter_live_pitch=req.filter_live_pitch,
+                    filter_price=req.filter_price,
                 )
                 plan = build_sell_plan(
                     transcribed,

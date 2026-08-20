@@ -52,6 +52,7 @@ class ExtractRules:
     detail: bool = True  # 保留产品细节特写
     silence: bool = True  # 自动去除无声/冗长卡顿与空白空镜
     filter_live_pitch: bool = True  # 自动过滤直播导流口播（1号链接、小黄车、去拍等）
+    filter_price: bool = False  # 自动过滤价格与逼单口播（不报价格/纯种草讲解）
     negative_words: tuple[str, ...] = ()  # 自定义否词列表
 
     @classmethod
@@ -60,16 +61,19 @@ class ExtractRules:
         raw: dict | None,
         negative_words: list[str] | None = None,
         filter_live_pitch: bool | None = None,
+        filter_price: bool | None = None,
     ) -> ExtractRules:
         if not raw:
             raw = {}
         negs = list(negative_words if negative_words is not None else raw.get("negative_words", []))
         flp = filter_live_pitch if filter_live_pitch is not None else raw.get("filter_live_pitch", True)
+        fp = filter_price if filter_price is not None else raw.get("filter_price", False)
         return cls(
             bargain=bool(raw.get("bargain", True)),
             detail=bool(raw.get("detail", True)),
             silence=bool(raw.get("silence", True)),
             filter_live_pitch=bool(flp),
+            filter_price=bool(fp),
             negative_words=tuple(str(w).strip() for w in negs if str(w).strip()),
         )
 
@@ -96,7 +100,7 @@ class NarrativeBlock:
 
 
 def is_negative_segment(text: str, rules: ExtractRules) -> bool:
-    """检查当前口播切片是否命中了自定义否词或直播导流黑名单。"""
+    """检查当前口播切片是否命中了自定义否词、直播导流黑名单或价格过滤。"""
     if not text:
         return False
     # 1. 用户自定义否词检查
@@ -108,6 +112,10 @@ def is_negative_segment(text: str, rules: ExtractRules) -> bool:
         for pitch in DEFAULT_LIVE_PITCH_WORDS:
             if pitch in text:
                 return True
+    # 3. 价格与逼单口播过滤（不报价格 / 纯种草模式）
+    if rules.filter_price:
+        if PRICE_RE.search(text):
+            return True
     return False
 
 
@@ -343,9 +351,14 @@ def build_sell_plan(
         return True
 
     # 动态规划结构预算：
-    # 开场 Hook 占 25%~35%，卖点/细节占 35%~50%，价格/福利占 25%~35%
-    hook_budget = target_seconds * (0.28 + ((variant % 3) - 1) * 0.04)
-    price_budget = target_seconds * (0.30 + ((variant % 2) * 0.05))
+    if rules.filter_price:
+        # 不报价格/纯种草模式：100% 预算分配给痛点开场与核心卖点/细节讲解，价格预算为 0
+        hook_budget = target_seconds * (0.35 + ((variant % 3) - 1) * 0.05)
+        price_budget = 0.0
+    else:
+        # 标准带货模式：开场 Hook 占 25%~35%，卖点/细节占 35%~50%，价格/福利占 25%~35%
+        hook_budget = target_seconds * (0.28 + ((variant % 3) - 1) * 0.04)
+        price_budget = target_seconds * (0.30 + ((variant % 2) * 0.05))
 
     # Step 1: 选取 1~2 个最抓人的开场段落 (Intro / Hook)
     for b in hook_blocks:
@@ -366,7 +379,7 @@ def build_sell_plan(
         try_add_block(b)
 
     # Step 3: 选取价格/逼单/福利段落 (Price / Bargain / Call-To-Action)
-    if rules.bargain and price_blocks:
+    if rules.bargain and not rules.filter_price and price_blocks:
         for b in price_blocks:
             if total_time >= target_seconds * 0.95:
                 break
@@ -421,6 +434,8 @@ def build_magic_cues(clips: list[EditClip], *, variant: int = 0) -> list[MagicCu
         "闭眼入",
         "真的好看",
         "质感拉满",
+        "细节满分",
+        "高级感",
         "看这里",
     ]
     offset = variant % len(tips_price)
@@ -441,7 +456,7 @@ def build_magic_cues(clips: list[EditClip], *, variant: int = 0) -> list[MagicCu
                     MagicCue(text=tips[tip_i % len(tips)], at=t + 0.15, duration=1.8)
                 )
                 tip_i += 1
-        elif (clip.role == "intro" or INTRO_RE.search(clip.text)) and intro_i < 1:
+        elif (clip.role == "intro" or INTRO_RE.search(clip.text)) and intro_i < 2:
             cues.append(
                 MagicCue(
                     text=intro_tips[intro_i % len(intro_tips)],

@@ -84,6 +84,7 @@ export type GeneratePayload = {
   extract_rules?: Record<string, boolean>
   negative_words?: string[]
   filter_live_pitch?: boolean
+  filter_price?: boolean
   variant_index?: number
   clips_per_video?: number | null
   shuffle_clips?: boolean
@@ -112,6 +113,7 @@ export type BatchGeneratePayload = {
   extract_rules?: Record<string, boolean>
   negative_words?: string[]
   filter_live_pitch?: boolean
+  filter_price?: boolean
   clips_per_video?: number | null
   shuffle_clips?: boolean
   deep_dedup?: boolean

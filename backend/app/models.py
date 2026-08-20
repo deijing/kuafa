@@ -83,6 +83,7 @@ class GenerateRequest(BaseModel):
     # 否词与违规口播过滤（如 1号链接、小黄车、去拍、关注主播等）
     negative_words: list[str] = Field(default_factory=list)
     filter_live_pitch: bool = True
+    filter_price: bool = False  # 不报价格 / 过滤价格与逼单口播（用于纯种草/细节讲解视频）
     # 批量成片：同素材池生成差异化版本（0=默认，1/2…换句序与侧重）
     variant_index: int = Field(default=0, ge=0, le=100)
     # 每几段素材缝合生成 1 个长视频（如 5 段/条）
@@ -119,6 +120,7 @@ class BatchGenerateRequest(BaseModel):
     extract_rules: dict[str, bool] | None = None
     negative_words: list[str] = Field(default_factory=list)
     filter_live_pitch: bool = True
+    filter_price: bool = False  # 不报价格 / 过滤价格与逼单口播（用于纯种草/细节讲解视频）
     clips_per_video: int | None = Field(default=None, ge=1, le=50)
     shuffle_clips: bool = True
     deep_dedup: bool = True

@@ -68,6 +68,9 @@ const COMMON_NEGATIVE_PRESETS = [
   "主播身材",
   "私信客服",
   "拍一发三",
+  "不要价格",
+  "到手价",
+  "券后价",
 ] as const
 
 type GeneratorViewProps = {
@@ -123,6 +126,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
 
   // 口播否词过滤
   const [filterLivePitch, setFilterLivePitch] = useState<boolean>(true)
+  const [filterPrice, setFilterPrice] = useState<boolean>(false)
   const [negativeWords, setNegativeWords] = useState<string[]>([
     "1号链接", "下方小黄车", "小黄车去拍", "关注主播"
   ])
@@ -315,6 +319,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
           extract_rules: rules,
           negative_words: negativeWords,
           filter_live_pitch: filterLivePitch,
+          filter_price: filterPrice,
           title: baseTitle,
           clips_per_video: clipsPerVideo,
           shuffle_clips: shuffleClips,
@@ -344,6 +349,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
               extract_rules: rules,
               negative_words: negativeWords,
               filter_live_pitch: filterLivePitch,
+              filter_price: filterPrice,
               title: `${baseTitle} #${i + 1}`,
               variant_index: i,
               clips_per_video: clipsPerVideo,
@@ -759,6 +765,28 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                   <Switch
                     checked={filterLivePitch}
                     onCheckedChange={setFilterLivePitch}
+                    disabled={busy}
+                  />
+                </div>
+
+                {/* 不报价格 / 纯种草讲解 Switch */}
+                <div className="flex items-center justify-between pt-2.5 border-t border-slate-200/60 dark:border-slate-700/60">
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                        不报价格 (纯种草/细节讲解)
+                      </span>
+                      <span className="text-[9px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 px-1.5 py-0.2 rounded border border-amber-200/60">
+                        去价格化
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-400">
+                      自动剔除「xx元、到手价、券后、特价秒杀」等报价口播，适合长期种草
+                    </span>
+                  </div>
+                  <Switch
+                    checked={filterPrice}
+                    onCheckedChange={setFilterPrice}
                     disabled={busy}
                   />
                 </div>
