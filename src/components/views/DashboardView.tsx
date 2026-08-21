@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/table"
 import { useMaterials } from "@/hooks/use-materials"
 import { fetchJobs, type Job } from "@/lib/api"
-import { cn } from "@/lib/utils"
+import { cn, formatProcessingDuration } from "@/lib/utils"
 
 type StatTone = "primary" | "violet" | "emerald" | "orange"
 
@@ -328,7 +328,8 @@ export function DashboardView({
                   <TableHead>项目名称</TableHead>
                   <TableHead>处理状态</TableHead>
                   <TableHead>消耗素材</TableHead>
-                  <TableHead>生成时长</TableHead>
+                  <TableHead>成片时长</TableHead>
+                  <TableHead>处理耗时</TableHead>
                   <TableHead>操作</TableHead>
                 </TableRow>
               </TableHeader>
@@ -394,6 +395,12 @@ export function DashboardView({
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {formatDuration(job.duration)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums">
+                        {formatProcessingDuration(job.processing_seconds)}
+                        {job.status === "running" || job.status === "queued" ? (
+                          <span className="ml-1 text-[10px]">已用</span>
+                        ) : null}
                       </TableCell>
                       <TableCell>
                         {done && job.output_url ? (

@@ -50,6 +50,45 @@ _JOB_ID_RE = re.compile(r"^[a-f0-9]{8,32}$")
 _RUN_SEMAPHORE = threading.Semaphore(2)
 
 
+def _parse_iso(ts: str | None) -> datetime | None:
+    text = (ts or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def processing_seconds_between(created_at: str | None, finished_at: str | None) -> float | None:
+    start = _parse_iso(created_at)
+    end = _parse_iso(finished_at)
+    if not start or not end:
+        return None
+    secs = (end - start).total_seconds()
+    if secs < 0:
+        return None
+    return round(secs, 1)
+
+
+def hydrate_processing_seconds(job: JobOut) -> JobOut:
+    """补全处理耗时：已落库的用原值；进行中的按当前时刻估算；旧记录用起止时间回填。"""
+    if job.processing_seconds is not None:
+        return job
+    end = job.finished_at
+    if not end and job.status in (JobStatus.queued, JobStatus.running):
+        end = datetime.now(timezone.utc).isoformat()
+    secs = processing_seconds_between(job.created_at, end)
+    if secs is None:
+        return job
+    return job.model_copy(update={"processing_seconds": secs})
+
+
 class JobManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -74,18 +113,25 @@ class JobManager:
 
     def list_jobs(self) -> list[JobOut]:
         with self._lock:
-            return store.list_generate_jobs()
+            jobs = store.list_generate_jobs()
+        return [hydrate_processing_seconds(job) for job in jobs]
 
     def get(self, job_id: str) -> JobOut | None:
         with self._lock:
-            return store.get_generate_job(job_id)
+            job = store.get_generate_job(job_id)
+        return hydrate_processing_seconds(job) if job else None
 
     def _update(self, job_id: str, **kwargs) -> None:
         with self._lock:
             job = store.get_generate_job(job_id)
             if not job:
                 return
-            store.upsert_generate_job(job.model_copy(update=kwargs))
+            updated = job.model_copy(update=kwargs)
+            if updated.finished_at and updated.processing_seconds is None:
+                secs = processing_seconds_between(updated.created_at, updated.finished_at)
+                if secs is not None:
+                    updated = updated.model_copy(update={"processing_seconds": secs})
+            store.upsert_generate_job(updated)
 
     def delete(self, job_id: str) -> JobOut:
         """删除成片记录，并清理成片 mp4 + work 工程目录（不碰素材库）。"""

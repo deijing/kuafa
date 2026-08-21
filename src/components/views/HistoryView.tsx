@@ -20,6 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { deleteJob, fetchJobs, type Job } from "@/lib/api"
+import { formatProcessingDuration } from "@/lib/utils"
 import { useMaterials } from "@/hooks/use-materials"
 
 function statusBadge(job: Job) {
@@ -178,7 +179,8 @@ export function HistoryView() {
             <TableHead className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">项目</TableHead>
             <TableHead className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">状态</TableHead>
             <TableHead className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">素材数</TableHead>
-            <TableHead className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">时长</TableHead>
+            <TableHead className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">成片时长</TableHead>
+            <TableHead className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">处理耗时</TableHead>
             <TableHead className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">创建时间</TableHead>
             <TableHead className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">操作</TableHead>
           </TableRow>
@@ -205,6 +207,18 @@ export function HistoryView() {
                 <TableCell className="py-3.5 text-xs text-slate-600 dark:text-slate-300 font-medium">{job.material_ids.length} 个</TableCell>
                 <TableCell className="py-3.5 text-xs font-mono text-slate-600 dark:text-slate-300">
                   {job.duration != null ? `${job.duration.toFixed(1)}s` : "—"}
+                </TableCell>
+                <TableCell className="py-3.5 text-xs font-medium text-slate-700 dark:text-slate-300">
+                  {job.processing_seconds != null ? (
+                    <span className="tabular-nums">
+                      {formatProcessingDuration(job.processing_seconds)}
+                      {job.status === "running" || job.status === "queued" ? (
+                        <span className="ml-1 text-[10px] font-normal text-slate-400">已用</span>
+                      ) : null}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
                 <TableCell className="py-3.5 text-xs text-slate-400 dark:text-slate-500">
                   {new Date(job.created_at).toLocaleString()}

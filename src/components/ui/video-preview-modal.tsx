@@ -15,7 +15,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import type { Job, CoverResult } from "@/lib/api"
-import { cn } from "@/lib/utils"
+import { cn, formatProcessingDuration } from "@/lib/utils"
 
 export type VideoPreviewModalProps = {
   isOpen: boolean
@@ -156,6 +156,11 @@ export function VideoPreviewModal({
                 <CheckCircle2 className="size-3" />
                 {currentJob.duration ? `${Math.round(currentJob.duration)} 秒` : "已就绪"}
               </span>
+              {currentJob.processing_seconds != null ? (
+                <span className="inline-flex items-center text-[11px] font-medium text-slate-300 bg-white/10 border border-white/10 px-2 py-0.5 rounded-full tabular-nums">
+                  处理 {formatProcessingDuration(currentJob.processing_seconds)}
+                </span>
+              ) : null}
             </div>
             {currentJob.headline ? (
               <span className="text-xs text-slate-400 truncate max-w-md mt-0.5">

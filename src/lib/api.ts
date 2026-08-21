@@ -43,6 +43,7 @@ export type Job = {
   output_url: string | null
   output_path: string | null
   duration: number | null
+  processing_seconds?: number | null
   material_ids: string[]
   group_id: string | null
   error: string | null

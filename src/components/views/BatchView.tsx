@@ -55,7 +55,7 @@ import {
   type Job,
   type VideoQuality,
 } from "@/lib/api"
-import { cn } from "@/lib/utils"
+import { cn, formatProcessingDuration } from "@/lib/utils"
 
 const COMMON_NEGATIVE_PRESETS = [
   "1号链接",
@@ -2017,6 +2017,12 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                               </span>
                             ) : null}
                           </div>
+                          {job.processing_seconds != null ? (
+                            <p className="text-[11px] text-slate-400 tabular-nums">
+                              处理耗时 {formatProcessingDuration(job.processing_seconds)}
+                              {active ? " · 已用" : ""}
+                            </p>
+                          ) : null}
                           {job.headline ? (
                             <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-1 flex items-center gap-1" title={job.headline}>
                               <Sparkles className="size-3 text-blue-500 shrink-0" />

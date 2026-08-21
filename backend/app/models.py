@@ -316,6 +316,7 @@ class JobOut(BaseModel):
     output_url: str | None = None
     output_path: str | None = None
     duration: float | None = None
+    processing_seconds: float | None = None  # 任务从排队到完成的处理耗时（秒）
     material_ids: list[str] = Field(default_factory=list)
     group_id: str | None = None
     error: str | None = None
