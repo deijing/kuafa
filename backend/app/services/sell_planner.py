@@ -128,7 +128,8 @@ def _is_sparse_or_stalled(seg: TranscriptSegment) -> bool:
     # Chinese roughly >= 2 chars/sec when speaking; far below = stall/silence
     if dur >= 2.0 and (len(text) / dur) < 1.1:
         return True
-    if dur < 0.6:
+    # 极短且几乎没有字才当卡顿丢掉；0.35s 以上的真实口播要保留
+    if dur < 0.35:
         return True
     return False
 
@@ -245,7 +246,7 @@ def extract_narrative_blocks(
             acc_dur = seg.end - curr_segs[0].start
 
             # 判定是否需要分段：
-            # 1. 停顿超过 1.2 秒（说话者明显中断、展示空镜或换镜头）
+            # 1. 停顿超过 0.45 秒（说话者中断、展示空镜或换镜头）
             # 2. 段落时长已达上限（通常 15~18s 足够讲完一个完整要点）
             # 3. 当前已积攒足够时长(>=7s)且当前句明确进入价格/逼单环节，而前文是介绍环节
             is_role_shift = False
@@ -254,7 +255,7 @@ def extract_narrative_blocks(
                 if not PRICE_RE.search(prev_text) and PRICE_RE.search(seg.text):
                     is_role_shift = True
 
-            if gap > 1.2 or acc_dur >= max_block_seconds or is_role_shift:
+            if gap > 0.45 or acc_dur >= max_block_seconds or is_role_shift:
                 flush_block()
                 curr_segs.append(seg)
             else:

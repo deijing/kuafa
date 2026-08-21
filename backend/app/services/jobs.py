@@ -1,4 +1,5 @@
 import concurrent.futures
+import logging
 import re
 import shutil
 import threading
@@ -32,6 +33,9 @@ from app.services.covers import (
     select_best_cover_frames_from_video,
 )
 from app.services.openai_client import has_openai_key
+from app.services.secrets import get_secret
+
+logger = logging.getLogger(__name__)
 
 
 TARGET_SECONDS = {
@@ -229,6 +233,7 @@ class JobManager:
                     duration_preference=req.duration_preference,
                     target_seconds=req.target_seconds,
                     speech_speed=req.speech_speed,
+                    video_quality=req.video_quality,
                     randomize_intro=req.randomize_intro,
                     subtitle_position=req.subtitle_position,
                     add_captions=req.add_captions,
@@ -275,6 +280,7 @@ class JobManager:
                     status=JobStatus.running,
                 )
 
+            magic_cues = []
             if req.mode == "sell":
                 engine = get_secret("transcription_engine", settings.transcription_engine or "local")
                 local_model = get_secret("local_whisper_model", settings.local_whisper_model or "base")
@@ -413,8 +419,10 @@ class JobManager:
                 # 4. 视频渲染完成，收拢并行生成的 AI 封面结果（此时封面已在后台生成完毕，无需额外等待）
                 on_progress(96, "视频合成完成，同步合并高转化 AI 封面…")
                 try:
-                    covers = cover_future.result(timeout=200)
-                except Exception:
+                    # 3 张封面各自最多轮询 ~180s，预留余量避免成片成功但封面被丢弃
+                    covers = cover_future.result(timeout=600)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("成片封面生成失败或超时: %s", exc)
                     covers = []
 
             final_headline = (covers[0].headline if covers and covers[0].headline else None) or req.title or "爆款带货 极速出片"

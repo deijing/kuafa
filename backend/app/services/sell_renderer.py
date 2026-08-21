@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 from app.config import settings
 from app.services.ffmpeg_pipeline import (
     ensure_ffmpeg_configured,
+    input_window_args,
     probe,
     resolve_subtitle_font,
     run_cmd,
+    trim_audio_filter,
+    trim_video_filter,
 )
 from app.services.sell_planner import EditClip, MagicCue
 
@@ -93,17 +97,17 @@ def _ts(seconds: float) -> str:
 
 def fuse_adjacent_clips(
     clips: list[EditClip],
-    max_gap: float = 0.35,
+    max_gap: float = 0.20,
 ) -> tuple[list[EditClip], list[EditClip]]:
     """
-    智能将同素材且时间极度相连的句子融合成连续的大视频切片（严格限制缝隙 <=0.35s），
+    智能将同素材且时间极度相连的句子融合成连续的大视频切片（严格限制缝隙 <=0.20s），
     同时返回时间轴完全对齐的 subtitle_clips（用于精准单句字幕烧录）。
     彻底避免在同素材内部反复做硬切和拼接导致的微卡顿与音爆，同时严禁将原片停顿死寂空白缝入成片。
     """
     if not clips:
         return [], []
 
-    # 1. 调整相邻句子的边界，平滑消除 ASR 极细微切分缝隙（<=0.35s），保证音画完全连续且字幕不漂移
+    # 1. 调整相邻句子的边界，平滑消除 ASR 极细微切分缝隙（<=0.20s），保证音画完全连续且字幕不漂移
     aligned_clips: list[EditClip] = []
     for i, clip in enumerate(clips):
         start = clip.start
@@ -126,7 +130,7 @@ def fuse_adjacent_clips(
     video_segments: list[EditClip] = []
     curr = aligned_clips[0]
     for nxt in aligned_clips[1:]:
-        if nxt.path == curr.path and abs(nxt.start - curr.end) < 0.05:
+        if nxt.path == curr.path and abs(nxt.start - curr.end) < 0.04:
             curr = EditClip(
                 path=curr.path,
                 start=curr.start,
@@ -241,8 +245,8 @@ def render_sell_video(
     work = settings.work_dir / output.stem
     work.mkdir(parents=True, exist_ok=True)
 
-    # 1. 智能相邻片段融合，生成连续的视频切片与对齐的字幕切片（严控缝隙 <=0.35s）
-    video_segments, subtitle_clips = fuse_adjacent_clips(clips, max_gap=0.35)
+    # 1. 智能相邻片段融合，生成连续的视频切片与对齐的字幕切片（严控缝隙 <=0.20s）
+    video_segments, subtitle_clips = fuse_adjacent_clips(clips, max_gap=0.20)
 
     # 2. 动态根据用户选择的画质设置分辨率与 CRF 压缩质量
     vq = (video_quality or "1080p").lower()
@@ -264,51 +268,43 @@ def render_sell_video(
         seg_file = work / f"seg_{i:03d}.mp4"
         raw_dur = max(0.2, seg_clip.end - seg_clip.start)
         info = probe(seg_clip.path)
+        seg_dur = max(0.2, raw_dur / speech_speed)
 
-        vf_filter = (
+        # trim/atrim 用同一条原片时间轴裁切，避免双 -ss 画面在说话、声音却是静音
+        vf_after = (
             f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
         )
         if abs(speech_speed - 1.0) > 0.01:
-            vf_filter += f"setpts=(PTS-STARTPTS)/{speech_speed:.4f},"
-        else:
-            vf_filter += "setpts=PTS-STARTPTS,"
-        vf_filter += f"fps={fps},format=yuv420p"
-
-        # 组合 Seek 算法（精准裁剪 + 毫秒级对齐）：
-        pre_roll = min(3.0, seg_clip.start)
-        fast_seek = max(0.0, seg_clip.start - pre_roll)
-        fine_seek = seg_clip.start - fast_seek
-        seg_dur = max(0.2, raw_dur / speech_speed)
+            vf_after += f"setpts=PTS/{speech_speed:.4f},"
+        vf_after += f"fps={fps},format=yuv420p"
 
         cmd = [
             settings.ffmpeg_bin,
             "-y",
-            "-ss",
-            f"{fast_seek:.3f}",
-            "-i",
-            str(seg_clip.path),
-            "-ss",
-            f"{fine_seek:.3f}",
-            "-t",
-            f"{seg_dur:.3f}",
+            *input_window_args(seg_clip.path, seg_clip.start),
             "-vf",
-            vf_filter,
+            trim_video_filter(seg_clip.start, raw_dur, vf_after),
         ]
 
         if info.has_audio:
-            af_filter = ""
+            af_after = ""
             if abs(speech_speed - 1.0) > 0.01:
-                af_filter += f"atempo={speech_speed:.4f},"
-            af_filter += (
+                af_after += f"atempo={speech_speed:.4f},"
+            af_after += (
                 "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
-                "asetpts=PTS-STARTPTS"
+                "dynaudnorm=f=75:g=15:m=10.0:r=0.9,"
+                "volume=1.15"
             )
-            # 轻微平滑淡入淡出（25ms），消除切点电流音/破音
-            if seg_dur >= 1.0:
-                fade_out_st = max(0.1, seg_dur - 0.035)
-                af_filter += f",afade=t=in:ss=0:d=0.025,afade=t=out:st={fade_out_st:.3f}:d=0.035"
-            cmd += ["-af", af_filter]
+            if seg_dur >= 0.8:
+                fade_out_st = max(0.1, seg_dur - 0.025)
+                af_after += (
+                    f",afade=t=in:st=0:d=0.015,afade=t=out:st={fade_out_st:.3f}:d=0.025"
+                )
+            cmd += [
+                "-af",
+                trim_audio_filter(seg_clip.start, raw_dur, af_after),
+            ]
         else:
             cmd += [
                 "-f",
@@ -449,6 +445,7 @@ def render_sell_video(
             current = mixed
 
     on_progress(96, "写出最终成片…")
-    output.write_bytes(current.read_bytes())
+    if current.resolve() != output.resolve():
+        shutil.copyfile(current, output)
     on_progress(100, "成片完成")
     return probe(output).duration

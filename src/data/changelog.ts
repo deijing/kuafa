@@ -15,16 +15,47 @@ export type ChangelogItem = {
   }[]
 }
 
-export const APP_VERSION = "v1.6.0"
+export const APP_VERSION = "v1.6.1"
 export const APP_BUILD_DATE = "2026-08-21"
 
 export const CHANGELOG_DATA: ChangelogItem[] = [
+  {
+    version: "v1.6.1",
+    date: "2026-08-21",
+    title: "成片音画精确对齐 · 说话静音修复 · 批量画质与任务启动崩溃修复",
+    tag: "⚡ 算法优化",
+    isLatest: true,
+    highlights: [
+      "🎬 音画按同一时间轴裁切：用 trim / atrim 替代双 -ss，修复成片里人在说话却没有声音",
+      "🔇 真停顿切断、短口播保留：融合缝隙收到 0.20s，不再把静音缝回去，也不再丢掉短句",
+      "🛠️ 成片任务启动不再崩溃：补回 get_secret 导入，智能混剪与批量制作可正常进入转写",
+      "📺 批量成片画质生效：4K / 2K / 1080P / 720P 会传到每条批量任务",
+    ],
+    details: [
+      {
+        type: "fix",
+        text: "成片裁切改为 trim/atrim 共用原片时间戳：避免输入侧关键帧 seek 与输出侧 -ss 把画面、声音切到不同位置，修复「嘴在动、音轨是静的」。",
+      },
+      {
+        type: "fix",
+        text: "收紧相邻句融合与叙事停顿阈值，真停顿必须切断；短于 0.8s 但有实际口播的片段予以保留，避免切出去再丢掉。",
+      },
+      {
+        type: "fix",
+        text: "jobs.py 补回 get_secret 导入，并透传批量 video_quality；封面等待延长到 600 秒，成片落盘改为文件拷贝避免整段读入内存。",
+      },
+      {
+        type: "perf",
+        text: "有声检测只解码音频、超时 180 秒并杀掉残留 FFmpeg，失败打日志而不再静默回退到可能切中死寂的比例抽样。",
+      },
+    ],
+  },
   {
     version: "v1.6.0",
     date: "2026-08-21",
     title: "双模 ASR 离线转写引擎 · 纯种草否词过滤 · 音频贪婪合并修复与一行双列大图排版",
     tag: "🚀 重点迭代",
-    isLatest: true,
+    isLatest: false,
     highlights: [
       "🔒 本地 Faster-Whisper 离线转写：集成 CTranslate2 int8 加速，免联网、100% 隐私安全、无任何外部调用限制与费用",
       "☁️ 云端必剪 ASR 高速转写：保留必剪云端直连模式，免占用本地算力，极速输出带货口播字幕",

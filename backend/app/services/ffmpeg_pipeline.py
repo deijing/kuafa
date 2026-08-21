@@ -222,6 +222,36 @@ def probe_cached(path: Path) -> MediaInfo:
     return info
 
 
+def input_window_args(src: Path, start: float, *, pre_roll: float = 5.0) -> list[str]:
+    """快进到裁切点附近，保留原始时间戳，让后续 trim/atrim 用同一条时间轴。"""
+    start = max(0.0, float(start))
+    pre = min(pre_roll, start)
+    fast = max(0.0, start - pre)
+    return [
+        "-copyts",
+        "-ss",
+        f"{fast:.3f}",
+        "-i",
+        str(src),
+    ]
+
+
+def trim_video_filter(start: float, duration: float, vf_after: str) -> str:
+    """按绝对时间裁视频，避免双 -ss 把画面和声音切到不同位置。"""
+    start = max(0.0, float(start))
+    duration = max(0.2, float(duration))
+    after = vf_after.lstrip(",")
+    return f"trim=start={start:.3f}:duration={duration:.3f},setpts=PTS-STARTPTS,{after}"
+
+
+def trim_audio_filter(start: float, duration: float, af_after: str) -> str:
+    """按与视频相同的绝对时间裁音频，避免说话画面配上静音音轨。"""
+    start = max(0.0, float(start))
+    duration = max(0.2, float(duration))
+    after = af_after.lstrip(",")
+    return f"atrim=start={start:.3f}:duration={duration:.3f},asetpts=PTS-STARTPTS,{after}"
+
+
 def format_duration(seconds: float) -> str:
     total = max(0, int(round(seconds)))
     m, s = divmod(total, 60)
@@ -253,43 +283,154 @@ def generate_thumbnail(src: Path, dest: Path, at_seconds: float = 1.0) -> None:
     )
 
 
+def get_audible_spans(video_path: Path, min_duration: float = 1.5) -> list[tuple[float, float]]:
+    """检测视频中有人声或明显音效的有声区间（秒），过滤死寂与消音空镜。"""
+    try:
+        import numpy as np
+    except ImportError:
+        logger.warning("有声检测跳过：未安装 numpy")
+        return []
+
+    cmd = [
+        settings.ffmpeg_bin,
+        "-i",
+        str(video_path),
+        "-vn",
+        "-f",
+        "s16le",
+        "-ac",
+        "1",
+        "-ar",
+        "8000",
+        "-",
+    ]
+    proc = None
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        raw, _ = proc.communicate(timeout=180)
+    except subprocess.TimeoutExpired:
+        if proc is not None:
+            proc.kill()
+            proc.communicate()
+        logger.warning("有声检测超时: %s", video_path)
+        return []
+    except Exception:
+        if proc is not None:
+            proc.kill()
+            try:
+                proc.communicate()
+            except Exception:
+                pass
+        logger.warning("有声检测失败: %s", video_path, exc_info=True)
+        return []
+
+    if not raw:
+        return []
+
+    samples = np.frombuffer(raw, dtype=np.int16)
+    sr = 8000
+    win = int(sr * 0.4)  # 0.4s 窗口
+    if len(samples) < win:
+        return []
+
+    rms_vals: list[tuple[float, float]] = []
+    for i in range(0, len(samples), win):
+        chunk = samples[i : i + win]
+        if len(chunk) == 0:
+            continue
+        rms = float(np.sqrt(np.mean(chunk.astype(np.float64) ** 2)))
+        rms_vals.append((i / sr, rms))
+
+    if not rms_vals:
+        return []
+
+    max_rms = max(r for _, r in rms_vals)
+    thresh = max(350.0, max_rms * 0.10)
+
+    spans: list[tuple[float, float]] = []
+    cur_start: float | None = None
+    last_active: float | None = None
+
+    for t, r in rms_vals:
+        if r >= thresh:
+            if cur_start is None:
+                cur_start = t
+            last_active = t + 0.4
+        else:
+            if cur_start is not None and last_active is not None:
+                if last_active - cur_start >= min_duration:
+                    spans.append((cur_start, last_active))
+                cur_start = None
+                last_active = None
+
+    if cur_start is not None and last_active is not None:
+        if last_active - cur_start >= min_duration:
+            spans.append((cur_start, last_active))
+
+    return spans
+
+
 def build_segment_plan(
     materials: list[MediaInfo],
     *,
     target_total: float,
     segment_len: float,
 ) -> list[tuple[Path, float, float]]:
-    """Pick ~segment_len highlights across materials until target_total."""
+    """智能从素材中提取有声音的高光片段，确保每一段都有声音。"""
     if not materials:
         return []
 
-    ratios = (0.18, 0.42, 0.68, 0.85)
     plan: list[tuple[Path, float, float]] = []
     total = 0.0
-    round_idx = 0
 
-    while total < target_total and round_idx < len(ratios) * 3:
-        ratio = ratios[round_idx % len(ratios)]
-        for info in materials:
+    # 1. 优先从真实有声区间中按长度采样
+    for info in materials:
+        if total >= target_total:
+            break
+        if not info.has_audio or info.duration < 1.5:
+            continue
+        spans = get_audible_spans(info.path, min_duration=min(2.0, segment_len))
+        for span_start, span_end in spans:
             if total >= target_total:
                 break
-            if info.duration < 1.5:
+            span_dur = span_end - span_start
+            if span_dur < 1.0:
                 continue
-            length = min(segment_len, info.duration)
-            start = max(0.0, min(info.duration - length, info.duration * ratio))
-            end = start + length
-            # avoid near-duplicate windows on same file
+            act_len = min(segment_len, span_dur)
+            start = span_start
+            end = start + act_len
             overlapping = any(
-                p == info.path and abs(s - start) < length * 0.6 for p, s, _ in plan
+                p == info.path and abs(s - start) < act_len * 0.6 for p, s, _ in plan
             )
             if overlapping:
                 continue
             plan.append((info.path, start, end))
-            total += length
-        round_idx += 1
+            total += act_len
+
+    # 2. 若仍未凑足时长，回退均匀多点采样
+    if total < target_total:
+        ratios = (0.18, 0.42, 0.68, 0.85)
+        round_idx = 0
+        while total < target_total and round_idx < len(ratios) * 3:
+            ratio = ratios[round_idx % len(ratios)]
+            for info in materials:
+                if total >= target_total:
+                    break
+                if info.duration < 1.5:
+                    continue
+                length = min(segment_len, info.duration)
+                start = max(0.0, min(info.duration - length, info.duration * ratio))
+                end = start + length
+                overlapping = any(
+                    p == info.path and abs(s - start) < length * 0.6 for p, s, _ in plan
+                )
+                if overlapping:
+                    continue
+                plan.append((info.path, start, end))
+                total += length
+            round_idx += 1
 
     if not plan:
-        # fallback: take beginning of each
         for info in materials:
             length = min(segment_len, info.duration)
             plan.append((info.path, 0.0, length))
@@ -320,29 +461,26 @@ def render_highlight_reel(
         seg = work / f"seg_{i:03d}.mp4"
         duration = max(0.2, end - start)
         info = probe(src)
-        # 组合 Seek 算法：前置 fast_seek 快速跳过关键帧，后置 fine_seek 精确对齐起始帧
-        pre_roll = min(3.0, start)
-        fast_seek = max(0.0, start - pre_roll)
-        fine_seek = start - fast_seek
-
+        vf_after = (
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p"
+        )
         cmd = [
             settings.ffmpeg_bin,
             "-y",
-            "-ss",
-            f"{fast_seek:.3f}",
-            "-i",
-            str(src),
-            "-ss",
-            f"{fine_seek:.3f}",
-            "-t",
-            f"{duration:.3f}",
+            *input_window_args(src, start),
+            "-vf",
+            trim_video_filter(start, duration, vf_after),
         ]
         if info.has_audio:
             cmd += [
-                "-vf",
-                f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS,fps={fps},format=yuv420p",
                 "-af",
-                "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS",
+                trim_audio_filter(
+                    start,
+                    duration,
+                    "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                    "dynaudnorm=f=75:g=15:m=10.0:r=0.9,volume=1.15",
+                ),
             ]
         else:
             cmd += [
@@ -350,8 +488,6 @@ def render_highlight_reel(
                 "lavfi",
                 "-i",
                 "anullsrc=channel_layout=stereo:sample_rate=44100",
-                "-vf",
-                f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS,fps={fps},format=yuv420p",
                 "-shortest",
             ]
         cmd += [
@@ -371,7 +507,6 @@ def render_highlight_reel(
             "+faststart",
             str(seg),
         ]
-        # Prefer simple -ss/-t over complex trim filters for reliability
         run_cmd(cmd, timeout=300)
         segment_files.append(seg)
 
@@ -442,7 +577,7 @@ def render_highlight_reel(
         )
     else:
         on_progress(90, "写出最终文件…")
-        output.write_bytes(temp_out.read_bytes())
+        shutil.copyfile(temp_out, output)
 
     on_progress(98, "探测输出时长…")
     out_info = probe(output)

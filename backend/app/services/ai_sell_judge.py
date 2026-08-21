@@ -57,7 +57,7 @@ def ai_judge_sell_plan(
                 continue
             last = curr_clips[-1]
             gap = clip.start - last.end
-            if clip.path == last.path and gap <= 1.8 and (clip.end - curr_clips[0].start) <= 18.0:
+            if clip.path == last.path and gap <= 0.45 and (clip.end - curr_clips[0].start) <= 18.0:
                 curr_clips.append(clip)
             else:
                 b_text = "".join(c.text for c in curr_clips)

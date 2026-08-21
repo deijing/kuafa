@@ -91,7 +91,7 @@ ensure_dirs()
 seed_demo_group_from_case()
 ensure_ffmpeg_configured()
 
-app = FastAPI(title="快发 API", version="1.6.0")
+app = FastAPI(title="快发 API", version="1.6.1")
 
 app.add_middleware(
     CORSMiddleware,
