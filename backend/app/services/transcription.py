@@ -61,24 +61,24 @@ _PARTICLE_ENDINGS = re.compile(
 
 # 明显属于句首/连接词/未表达完的话头，绝不能在此处切断
 _DANGLING_CONNECTIVES = re.compile(
-    r"(因为|所以|而且|并且|不仅|但是|虽然|然后|如果|比如|关于|这款|采用|含有|具有|主要|就是|这个|那个|大家|想要|喜欢|需要|包含|包括|带一个|给你|给您|支持|非常|特别|十分|格外|极其|正在|准备|建议|推荐|为了|通过|由|随着|只要|如果说|甚至|同时|另外|第一|第二|第三|首先|其次)$"
+    r"(因为|所以|而且|并且|不仅|但是|虽然|然后|如果|比如|关于|这款|采用|含有|具有|主要|就是|这个|那个|大家|想要|喜欢|需要|包含|包括|带一个|给你|给您|支持|非常|特别|十分|格外|极其|正在|准备|建议|推荐|为了|通过|由|随着|只要|如果说|甚至|同时|另外|第一|第二|第三|首先|其次|面料是|重量是|克重是|厚度是|尺码是|颜色是|颜色有|价格是|只要|立省)$"
 )
 
 
 def merge_to_sentences(
     segments: list[TranscriptSegment],
     *,
-    max_len: float = 10.0,
+    max_len: float = 12.0,
     min_len: float = 0.8,
 ) -> list[TranscriptSegment]:
     """
     智能合并 ASR 细碎片段为完整自然的表达句子：
     1. 依据标点符号（。！？!?；;）硬断句
-    2. 依据物理明显停顿（pause gap >= 0.40s）坚决断句，杜绝跨静音贪婪合并产生死寂空白
-    3. 依据中等自然停顿（pause gap >= 0.25s 且 dur >= 0.8s 且非悬空连接词）自然断句
-    4. 依据句末收尾词 + 轻微停顿断句（需已有足够时长，避免把短句切出去再丢掉）
+    2. 依据物理明显大停顿（pause gap >= 0.65s 且非未表达完的话头）断句，避免把说话过程中的正常换气截断
+    3. 依据中等自然停顿（pause gap >= 0.40s 且 dur >= 1.0s 且非悬空连接词）自然断句
+    4. 依据句末收尾词 + 停顿断句
     5. 超出时长上限断句
-    短于 min_len 但有实际口播的片段会保留，而不是丢弃。
+    短于 min_len 但有实际口播的片段会保留，杜绝吞字丢字。
     """
     if not segments:
         return []
@@ -94,8 +94,8 @@ def merge_to_sentences(
         nonlocal buf_text, buf_start, buf_end
         text = buf_text.strip()
         dur = buf_end - buf_start
-        # 有口播就保留：短于 min_len 的应答/语气词不再直接扔掉
-        if text and (dur >= 0.25 or len(text) >= 2):
+        # 有口播就保留：短于 min_len 的应答/语气词/数据单位不再直接扔掉
+        if text and (dur >= 0.20 or len(text) >= 2):
             sentences.append(
                 TranscriptSegment(start=buf_start, end=buf_end, text=text)
             )
@@ -120,26 +120,25 @@ def merge_to_sentences(
         # 1. 缓冲区末尾已有明确结束标点
         if _SENTENCE_END.search(buf_text):
             should_split = True
-        # 2. 物理停顿（>=0.40s），坚决断句，严防将静音空白包含在句子内部
-        elif gap >= 0.40:
+        # 2. 明显物理停顿（>=0.65s），且末尾不是未说完的悬空连接词/话头
+        elif gap >= 0.65 and not _DANGLING_CONNECTIVES.search(buf_text):
             should_split = True
-        # 3. 中等停顿（>=0.25s）+ 时长足够（>=0.8s）+ 末尾不是未说完的悬空连接词
-        elif gap >= 0.25 and dur >= 0.8 and not _DANGLING_CONNECTIVES.search(buf_text):
+        # 3. 中等停顿（>=0.40s）+ 时长足够（>=1.0s）+ 末尾不是未说完的悬空连接词
+        elif gap >= 0.40 and dur >= 1.0 and not _DANGLING_CONNECTIVES.search(buf_text):
             should_split = True
-        # 4. 句末语气词/收尾词 + 轻微停顿，且当前句已够成句
-        elif gap >= 0.15 and dur >= 0.8 and _PARTICLE_ENDINGS.search(buf_text):
+        # 4. 句末语气词/收尾词 + 停顿，且当前句已够成句
+        elif gap >= 0.25 and dur >= 0.8 and _PARTICLE_ENDINGS.search(buf_text):
             should_split = True
         # 5. 超出软上限且当前句子可收尾
         elif dur >= max_len and not _DANGLING_CONNECTIVES.search(buf_text):
             should_split = True
         # 6. 绝对硬上限（防止异常长段）
-        elif dur >= max_len + 2.0:
+        elif dur >= max_len + 3.0:
             should_split = True
 
         if should_split:
             # 真停顿必须切断，避免把静音缝进句子；短口播由 flush 保留
-            # 仅在极小 ASR 切分缝隙时，把过短缓冲并入下一句
-            if dur >= min_len or gap >= 0.40:
+            if dur >= min_len or gap >= 0.65:
                 flush()
                 buf_start = seg.start
                 buf_text = seg_text
@@ -204,6 +203,10 @@ def transcribe_local(
             language=language,
             beam_size=5,
             vad_filter=True,
+            vad_parameters=dict(
+                min_silence_duration_ms=450,
+                speech_pad_ms=300,
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         raise TranscriptionError(f"本地 Whisper 转写失败: {exc}") from exc
@@ -217,7 +220,7 @@ def transcribe_local(
         end = max(start + 0.15, float(seg.end))
         segments.append(TranscriptSegment(start=start, end=end, text=text))
 
-    return merge_to_sentences(segments, max_len=10.0, min_len=0.8)
+    return merge_to_sentences(segments, max_len=12.0, min_len=0.8)
 
 
 def transcribe_bcut(video: Path) -> list[TranscriptSegment]:

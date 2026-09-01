@@ -9,12 +9,34 @@ from app.services.ffmpeg_pipeline import (
     ensure_ffmpeg_configured,
     input_window_args,
     probe,
+    probe_cached,
     resolve_subtitle_font,
     run_cmd,
     trim_audio_filter,
     trim_video_filter,
 )
 from app.services.sell_planner import EditClip, MagicCue
+from dataclasses import dataclass
+
+HEAD_PAD: float = 0.08  # 秒：片头提前量（保护首字清辅音/声母，防止吃头音）
+TAIL_PAD: float = 0.25  # 秒：片尾延后量（保护尾字/儿化音/语气词/气口，彻底解决句尾吞字）
+
+
+@dataclass
+class VideoSlice:
+    path: Path
+    cut_start: float
+    cut_end: float
+    raw_dur: float
+    text: str
+    role: str
+
+
+@dataclass
+class SubtitleItem:
+    text: str
+    start: float  # 成片时间轴起点（秒）
+    end: float    # 成片时间轴终点（秒）
 
 
 def find_available_bgm(preferred: str | None = None) -> Path | None:
@@ -95,59 +117,134 @@ def _ts(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{c:02d}"
 
 
-def fuse_adjacent_clips(
+def fuse_and_pad_clips(
     clips: list[EditClip],
-    max_gap: float = 0.20,
-) -> tuple[list[EditClip], list[EditClip]]:
+    *,
+    speech_speed: float = 1.0,
+    max_gap: float = 0.80,
+    head_pad: float = HEAD_PAD,
+    tail_pad: float = TAIL_PAD,
+) -> tuple[list[VideoSlice], list[SubtitleItem]]:
     """
-    智能将同素材且时间极度相连的句子融合成连续的大视频切片（严格限制缝隙 <=0.20s），
-    同时返回时间轴完全对齐的 subtitle_clips（用于精准单句字幕烧录）。
-    彻底避免在同素材内部反复做硬切和拼接导致的微卡顿与音爆，同时严禁将原片停顿死寂空白缝入成片。
+    智能将同素材且时间相连的句子融合成连续的大视频切片（允许自然说话换气停顿 <=0.80s），
+    为每个独立裁切点施加前后保护边距 (head_pad, tail_pad)，彻底杜绝句尾吞字/首字截断，
+    并精确计算与最终成片时间轴毫秒级对齐的字幕条目 (SubtitleItem)。
     """
     if not clips:
         return [], []
 
-    # 1. 调整相邻句子的边界，平滑消除 ASR 极细微切分缝隙（<=0.20s），保证音画完全连续且字幕不漂移
-    aligned_clips: list[EditClip] = []
-    for i, clip in enumerate(clips):
-        start = clip.start
-        end = clip.end
-        if i + 1 < len(clips):
-            nxt = clips[i + 1]
-            if nxt.path == clip.path and 0.0 <= (nxt.start - end) <= max_gap:
-                end = nxt.start
-        aligned_clips.append(
-            EditClip(
-                path=clip.path,
-                start=start,
-                end=end,
-                text=clip.text,
-                role=clip.role,
+    speed = max(0.5, min(2.0, speech_speed))
+
+    # 1. 将同素材且停顿在合理换气范围 (<=max_gap) 内的相邻句子聚类为一个连续视频切片
+    groups: list[list[EditClip]] = []
+    curr_group: list[EditClip] = []
+
+    for clip in clips:
+        if not curr_group:
+            curr_group.append(clip)
+            continue
+        last = curr_group[-1]
+        gap = clip.start - last.end
+        if clip.path == last.path and 0.0 <= gap <= max_gap:
+            curr_group.append(clip)
+        else:
+            groups.append(curr_group)
+            curr_group = [clip]
+    if curr_group:
+        groups.append(curr_group)
+
+    video_slices: list[VideoSlice] = []
+    subtitle_items: list[SubtitleItem] = []
+    timeline_cursor = 0.0
+
+    for i, group in enumerate(groups):
+        path = group[0].path
+        g_start = group[0].start
+        g_end = group[-1].end
+        info = probe_cached(path)
+        src_dur = info.duration
+
+        # 计算片头保护边距 (head_pad)
+        actual_head = min(head_pad, g_start)
+        if i > 0 and groups[i - 1][0].path == path:
+            prev_end = groups[i - 1][-1].end
+            if g_start >= prev_end:
+                actual_head = min(actual_head, max(0.0, (g_start - prev_end) * 0.45))
+        cut_start = max(0.0, g_start - actual_head)
+
+        # 计算片尾保护边距 (tail_pad)，彻底解决句尾吞字
+        actual_tail = min(tail_pad, max(0.0, src_dur - g_end))
+        if i + 1 < len(groups) and groups[i + 1][0].path == path:
+            nxt_start = groups[i + 1][0].start
+            if nxt_start >= g_end:
+                actual_tail = min(actual_tail, max(0.0, (nxt_start - g_end) * 0.45))
+        cut_end = min(src_dur, g_end + actual_tail)
+
+        raw_dur = max(0.2, cut_end - cut_start)
+        seg_dur = max(0.2, raw_dur / speed)
+
+        merged_text = " ".join(c.text.strip() for c in group if c.text.strip())
+        video_slices.append(
+            VideoSlice(
+                path=path,
+                cut_start=cut_start,
+                cut_end=cut_end,
+                raw_dur=raw_dur,
+                text=merged_text,
+                role=group[0].role,
             )
         )
 
-    # 2. 将同一素材中连续相接的句子合并为一个连续切片进行 FFmpeg 截取
-    video_segments: list[EditClip] = []
-    curr = aligned_clips[0]
-    for nxt in aligned_clips[1:]:
-        if nxt.path == curr.path and abs(nxt.start - curr.end) < 0.04:
-            curr = EditClip(
-                path=curr.path,
-                start=curr.start,
-                end=nxt.end,
-                text=f"{curr.text} {nxt.text}".strip(),
-                role=curr.role,
-            )
-        else:
-            video_segments.append(curr)
-            curr = nxt
-    video_segments.append(curr)
+        # 2. 为组内每个句子生成与最终成片音视频绝对对齐的字幕时间
+        for j, c in enumerate(group):
+            c_text = c.text.strip()
+            if not c_text:
+                continue
+            # 句子在切片内的起始与结束偏移（秒）
+            sub_start = timeline_cursor + max(0.0, (c.start - cut_start) / speed)
+            sub_end = timeline_cursor + min(seg_dur, (c.end - cut_start) / speed)
 
-    return video_segments, aligned_clips
+            # 若为组内最后一句，字幕可自然延展覆盖少许尾部缓冲
+            if j == len(group) - 1:
+                sub_end = min(timeline_cursor + seg_dur, sub_end + min(0.18, actual_tail) / speed)
+
+            if sub_end <= sub_start:
+                sub_end = sub_start + 0.3
+
+            subtitle_items.append(
+                SubtitleItem(
+                    text=c_text,
+                    start=sub_start,
+                    end=sub_end,
+                )
+            )
+
+        timeline_cursor += seg_dur
+
+    return video_slices, subtitle_items
+
+
+# 兼容旧名称
+def fuse_adjacent_clips(
+    clips: list[EditClip],
+    max_gap: float = 0.80,
+) -> tuple[list[EditClip], list[EditClip]]:
+    slices, _ = fuse_and_pad_clips(clips, max_gap=max_gap)
+    legacy_segments = [
+        EditClip(
+            path=s.path,
+            start=s.cut_start,
+            end=s.cut_end,
+            text=s.text,
+            role=s.role,
+        )
+        for s in slices
+    ]
+    return legacy_segments, clips
 
 
 def write_ass_subtitles(
-    clips: list[EditClip],
+    subtitles: list[SubtitleItem] | list[EditClip],
     ass_path: Path,
     *,
     magic_cues: list[MagicCue] | None = None,
@@ -176,15 +273,22 @@ Style: Hook,{font_name},110,&H0000D7FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = [header]
-    cursor = 0.0
     speed = max(0.5, min(2.0, speech_speed))
-    for clip in clips:
-        dur = max(0.2, (clip.end - clip.start) / speed)
-        clip_start = cursor
-        clip_end = cursor + dur
-        chunks = split_subtitle_chunks(clip.text, max_chars=10)
+
+    for item in subtitles:
+        if isinstance(item, SubtitleItem):
+            clip_start = item.start
+            clip_end = item.end
+            text = item.text
+        else:
+            dur = max(0.2, (item.end - item.start) / speed)
+            clip_start = 0.0
+            clip_end = dur
+            text = item.text
+
+        dur = max(0.2, clip_end - clip_start)
+        chunks = split_subtitle_chunks(text, max_chars=10)
         if not chunks:
-            cursor = clip_end
             continue
 
         weights = [max(1, len(c)) for c in chunks]
@@ -198,16 +302,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 end = min(clip_end, t + max(0.28 / speed, share))
             if end <= t:
                 end = min(clip_end, t + 0.28 / speed)
-            text = "{\\fad(80,60)}" + chunk
+            chunk_escaped = "{\\fad(80,60)}" + chunk
             lines.append(
-                f"Dialogue: 0,{_ts(t)},{_ts(end)},Default,,0,0,0,,{text}\n"
+                f"Dialogue: 0,{_ts(t)},{_ts(end)},Default,,0,0,0,,{chunk_escaped}\n"
             )
             t = end
-        cursor = clip_end
 
     for cue in magic_cues or []:
-        text = _ass_escape(re.sub(r"\s+", "", cue.text.strip()))[:10]
-        if not text:
+        cue_text = _ass_escape(re.sub(r"\s+", "", cue.text.strip()))[:10]
+        if not cue_text:
             continue
         start = max(0.0, cue.at / speed)
         end = start + max(0.8, cue.duration / speed)
@@ -216,7 +319,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             r"\t(180,360,\fscx100\fscy100)\bord5\shad0}"
         )
         lines.append(
-            f"Dialogue: 1,{_ts(start)},{_ts(end)},Hook,,0,0,0,,{anim}{text}\n"
+            f"Dialogue: 1,{_ts(start)},{_ts(end)},Hook,,0,0,0,,{anim}{cue_text}\n"
         )
 
     ass_path.parent.mkdir(parents=True, exist_ok=True)
@@ -245,8 +348,12 @@ def render_sell_video(
     work = settings.work_dir / output.stem
     work.mkdir(parents=True, exist_ok=True)
 
-    # 1. 智能相邻片段融合，生成连续的视频切片与对齐的字幕切片（严控缝隙 <=0.20s）
-    video_segments, subtitle_clips = fuse_adjacent_clips(clips, max_gap=0.20)
+    # 1. 智能相邻片段融合与保护边距施加（前后缓冲防吞字，平滑连续话术）
+    video_slices, subtitle_items = fuse_and_pad_clips(
+        clips,
+        speech_speed=speech_speed,
+        max_gap=0.80,
+    )
 
     # 2. 动态根据用户选择的画质设置分辨率与 CRF 压缩质量
     vq = (video_quality or "1080p").lower()
@@ -261,13 +368,13 @@ def render_sell_video(
 
     fps = settings.target_fps
     segment_files: list[Path] = []
-    n = len(video_segments)
+    n = len(video_slices)
 
-    for i, seg_clip in enumerate(video_segments):
+    for i, slice_item in enumerate(video_slices):
         on_progress(35 + int(40 * i / max(n, 1)), f"按连贯段落截取片段 {i + 1}/{n}…")
         seg_file = work / f"seg_{i:03d}.mp4"
-        raw_dur = max(0.2, seg_clip.end - seg_clip.start)
-        info = probe(seg_clip.path)
+        raw_dur = slice_item.raw_dur
+        info = probe_cached(slice_item.path)
         seg_dur = max(0.2, raw_dur / speech_speed)
 
         # trim/atrim 用同一条原片时间轴裁切，避免双 -ss 画面在说话、声音却是静音
@@ -282,9 +389,9 @@ def render_sell_video(
         cmd = [
             settings.ffmpeg_bin,
             "-y",
-            *input_window_args(seg_clip.path, seg_clip.start),
+            *input_window_args(slice_item.path, slice_item.cut_start),
             "-vf",
-            trim_video_filter(seg_clip.start, raw_dur, vf_after),
+            trim_video_filter(slice_item.cut_start, raw_dur, vf_after),
         ]
 
         if info.has_audio:
@@ -303,7 +410,7 @@ def render_sell_video(
                 )
             cmd += [
                 "-af",
-                trim_audio_filter(seg_clip.start, raw_dur, af_after),
+                trim_audio_filter(slice_item.cut_start, raw_dur, af_after),
             ]
         else:
             cmd += [
@@ -373,7 +480,7 @@ def render_sell_video(
             "烧录字幕与神奇大字动效…" if magic_cues else "烧录口播字幕…",
         )
         write_ass_subtitles(
-            subtitle_clips if add_subtitles else [],
+            subtitle_items if add_subtitles else [],
             work / "subs.ass",
             magic_cues=magic_cues,
             speech_speed=speech_speed,

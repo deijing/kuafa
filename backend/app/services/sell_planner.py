@@ -6,7 +6,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.services.transcription import TranscriptSegment
+from app.services.transcription import _DANGLING_CONNECTIVES, TranscriptSegment
 
 PRICE_RE = re.compile(
     r"(元|块钱|块|价格|只要|特价|秒杀|清仓|包邮|到手|券后|拍下|链接|优惠|打折|便宜|福利|逼单|库存|马上|下单|带走|拍一发|立省|省下|米)"
@@ -229,13 +229,12 @@ def _is_sparse_or_stalled(seg: TranscriptSegment) -> bool:
     """Heuristic: long window with little speech ≈ 卡顿/无声口播。"""
     text = seg.text.strip()
     dur = max(0.1, seg.end - seg.start)
-    if dur >= 3.0 and len(text) <= 4:
+    if dur >= 3.5 and len(text) <= 3:
         return True
-    # Chinese roughly >= 2 chars/sec when speaking; far below = stall/silence
-    if dur >= 2.0 and (len(text) / dur) < 1.1:
+    if dur >= 2.5 and (len(text) / dur) < 0.8 and len(text) <= 3:
         return True
-    # 极短且几乎没有字才当卡顿丢掉；0.35s 以上的真实口播要保留
-    if dur < 0.35:
+    # 极短且几乎没有字才当卡顿丢掉；0.25s 以上的真实口播要保留
+    if dur < 0.25:
         return True
     return False
 
@@ -245,11 +244,11 @@ def extract_narrative_blocks(
     *,
     rules: ExtractRules,
     max_block_seconds: float = 18.0,
-    min_block_seconds: float = 2.0,
+    min_block_seconds: float = 1.5,
 ) -> list[NarrativeBlock]:
     """
     将 ASR 识别出的单句按【时间连续性】与【话题完整性】聚类为高连贯的「话术叙事段落」。
-    保证段落内部一气呵成，完整表达一个核心卖点/引子/价格机制，杜绝断头截尾。
+    保证段落内部一气呵成，完整表达一个核心卖点/引子/价格机制，杜绝断头截尾或把同一句话切两半。
     """
     blocks: list[NarrativeBlock] = []
 
@@ -278,7 +277,7 @@ def extract_narrative_blocks(
             b_text = "".join(s.text.strip() for s in curr_segs)
             dur = max(0.2, b_end - b_start)
 
-            if dur < min_block_seconds and len(b_text) < 6:
+            if dur < 1.0 and len(b_text) < 3:
                 curr_segs = []
                 return
 
@@ -350,18 +349,28 @@ def extract_narrative_blocks(
             last_seg = curr_segs[-1]
             gap = seg.start - last_seg.end
             acc_dur = seg.end - curr_segs[0].start
+            prev_text = "".join(s.text for s in curr_segs)
 
             # 判定是否需要分段：
-            # 1. 停顿超过 0.45 秒（说话者中断、展示空镜或换镜头）
-            # 2. 段落时长已达上限（通常 15~18s 足够讲完一个完整要点）
+            # 1. 停顿超过 1.10 秒（明显转场或较长静音中断）
+            # 2. 段落时长达到上限且前句已完整收尾（非悬空连接词）
             # 3. 当前已积攒足够时长(>=7s)且当前句明确进入价格/逼单环节，而前文是介绍环节
             is_role_shift = False
             if acc_dur >= 7.0:
-                prev_text = "".join(s.text for s in curr_segs)
                 if not PRICE_RE.search(prev_text) and PRICE_RE.search(seg.text):
                     is_role_shift = True
 
-            if gap > 0.45 or acc_dur >= max_block_seconds or is_role_shift:
+            is_dangling = bool(_DANGLING_CONNECTIVES.search(prev_text))
+            
+            should_flush = False
+            if gap > 1.10 and not is_dangling:
+                should_flush = True
+            elif acc_dur >= max_block_seconds and not is_dangling:
+                should_flush = True
+            elif is_role_shift and not is_dangling:
+                should_flush = True
+
+            if should_flush:
                 flush_block()
                 curr_segs.append(seg)
             else:
