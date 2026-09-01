@@ -23,7 +23,14 @@ from app.services.ffmpeg_pipeline import (
     render_highlight_reel,
 )
 from app.services.materials import get_materials_by_ids
-from app.services.sell_planner import ExtractRules, build_magic_cues, build_sell_plan
+from app.services.sell_planner import (
+    ExtractRules,
+    build_magic_cues,
+    build_sell_plan,
+    claim_variant_opening,
+    extract_narrative_blocks,
+    splice_opening,
+)
 from app.services.sell_renderer import render_sell_video
 from app.services.transcription import TranscriptionError, transcribe_video
 from app.services.ai_sell_judge import ai_judge_sell_plan, collect_ai_candidates
@@ -366,12 +373,21 @@ class JobManager:
                     filter_live_pitch=req.filter_live_pitch,
                     filter_price=req.filter_price,
                 )
+                all_blocks = extract_narrative_blocks(transcribed, rules=rules)
+                intro_pool = [b for b in all_blocks if b.role == "intro"] or all_blocks
+                opening = claim_variant_opening(
+                    intro_pool,
+                    variant=req.variant_index,
+                    batch_id=req.batch_id,
+                    randomize_intro=req.randomize_intro,
+                )
                 plan = build_sell_plan(
                     transcribed,
                     target_seconds=raw_target,
                     rules=rules,
                     variant=req.variant_index,
                     randomize_intro=req.randomize_intro,
+                    forced_opening=opening,
                 )
                 magic_cues = build_magic_cues(plan, variant=req.variant_index)
 
@@ -382,9 +398,11 @@ class JobManager:
                         candidates,
                         target_seconds=raw_target,
                         variant=req.variant_index,
+                        preferred_opening=opening,
                     )
                     if judged:
                         plan, magic_cues = judged
+                        plan = splice_opening(plan, opening)
                         on_progress(34, "AI 已精选完整连贯段落与神奇大字…")
                     else:
                         on_progress(34, "AI 未返回有效方案，已回退规则连贯段落…")
@@ -413,73 +431,41 @@ class JobManager:
                 audio_sentences = [cue.text.strip() for cue in magic_cues if cue.text.strip()]
 
             group = store.get_group(req.group_id) if req.group_id else None
-            group_name = group.name if group else None
-
-            # 提前精选高质量代表帧
-            on_progress(35, "智能精选上镜高光帧，同步启动 AI 图生图…")
-            job_cover_dir = settings.covers_dir / job_id
-            if req.mode == "sell" and plan:
-                best_frames = select_best_cover_frames_from_clips(plan, count=3, out_dir=job_cover_dir)
+            # 2. 主线程执行视频切割、字幕烧录与高画质编码渲染
+            on_progress(35, "开始视频智能混剪与高画质编码渲染…")
+            if req.mode == "sell":
+                duration = render_sell_video(
+                    plan,
+                    out_path,
+                    add_subtitles=bool(add_subs),
+                    add_bgm=bool(add_bgm),
+                    bgm_volume=req.bgm_volume,
+                    bgm_file=req.bgm_file,
+                    magic_cues=magic_cues,
+                    speech_speed=speech_speed,
+                    subtitle_position=req.subtitle_position,
+                    video_quality=req.video_quality.value if hasattr(req.video_quality, "value") else str(req.video_quality),
+                    on_progress=on_progress,
+                )
             else:
-                best_frames = select_best_cover_frames_from_video(Path(materials[0].path), count=3, out_dir=job_cover_dir) if materials else []
-
-            # 2. 启动后台线程并发生成 AI 封面（视频渲染与封面生图 100% 同步并行进行）
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as cover_pool:
-                cover_future = cover_pool.submit(
-                    generate_video_covers,
-                    headline=None if req.mode == "sell" else req.title,
-                    job_id=job_id,
-                    pre_extracted_frames=best_frames,
-                    audio_transcript=audio_sentences,
-                    group_name=group_name,
-                    count=3,
-                    aspect_ratio="9:16",
-                    size="1024x1536",
-                    quality="high",
+                title = req.title if add_subs else None
+                duration = render_highlight_reel(
+                    plan,
+                    out_path,
+                    title=title,
+                    on_progress=on_progress,
                 )
 
-                # 3. 主线程同步执行视频切割、字幕烧录与高画质编码渲染
-                if req.mode == "sell":
-                    duration = render_sell_video(
-                        plan,
-                        out_path,
-                        add_subtitles=bool(add_subs),
-                        add_bgm=bool(add_bgm),
-                        bgm_volume=req.bgm_volume,
-                        bgm_file=req.bgm_file,
-                        magic_cues=magic_cues,
-                        speech_speed=speech_speed,
-                        subtitle_position=req.subtitle_position,
-                        video_quality=req.video_quality.value if hasattr(req.video_quality, "value") else str(req.video_quality),
-                        on_progress=on_progress,
-                    )
-                else:
-                    title = req.title if add_subs else None
-                    duration = render_highlight_reel(
-                        plan,
-                        out_path,
-                        title=title,
-                        on_progress=on_progress,
-                    )
-
-                # 4. 视频渲染完成，收拢并行生成的 AI 封面结果（此时封面已在后台生成完毕，无需额外等待）
-                on_progress(96, "视频合成完成，同步合并高转化 AI 封面…")
-                try:
-                    # 3 张封面各自最多轮询 ~180s，预留余量避免成片成功但封面被丢弃
-                    covers = cover_future.result(timeout=600)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("成片封面生成失败或超时: %s", exc)
-                    covers = []
-
-            final_headline = (covers[0].headline if covers and covers[0].headline else None) or req.title or "爆款带货 极速出片"
+            on_progress(98, "成片封装完成…")
+            final_headline = req.title or "爆款带货 极速出片"
 
             self._update(
                 job_id,
                 status=JobStatus.succeeded,
                 progress=100,
-                message="成片及封面生成完成",
+                message="成片生成完成",
                 headline=final_headline,
-                covers=covers,
+                covers=[],
                 finished_at=datetime.now(timezone.utc).isoformat(),
                 output_url=f"/api/outputs/{job_id}.mp4",
                 output_path=str(out_path),

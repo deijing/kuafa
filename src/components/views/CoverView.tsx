@@ -76,7 +76,7 @@ export function CoverView() {
   const [showMaterialPicker, setShowMaterialPicker] = useState(false)
   const [sourceVideoTitle, setSourceVideoTitle] = useState<string | null>(null)
 
-  // CatsAPI GPT Image 2 Parameters (默认 9:16 4K 超清画质图生图)
+  // CatsAPI GPT Image 2 Parameters (默认 9:16 2K 超清画质图生图)
   const [size, setSize] = useState<CoverSize>("1024x1536")
   const [count, setCount] = useState<number>(3)
   const [quality, setQuality] = useState<CoverQuality>("high")
@@ -205,7 +205,7 @@ export function CoverView() {
     setBusy(false)
     notify({
       title: "已新建封面工作台",
-      message: "已重置参考图与文案，支持上传实体物品与主播人像多图融合生图 (9:16 4K)",
+      message: "已重置参考图与文案，支持上传实体物品与主播人像多图融合生图 (9:16 2K)",
       type: "info",
     })
   }, [notify])
@@ -840,7 +840,7 @@ export function CoverView() {
                 <div className="p-2.5 rounded-xl bg-purple-100/50 dark:bg-purple-950/40 border border-purple-200/60 dark:border-purple-900/60 text-[11px] text-purple-800 dark:text-purple-300 leading-relaxed">
                   {refImages.length >= 2 ? (
                     <span>
-                      ✨ <strong>多图融合已激活</strong>：AI 将自动融合图 1 与图 2（主播手持/展示实体商品，9:16 4K 海报，人物五官与商品细节严格保真）。
+                      ✨ <strong>多图融合已激活</strong>：AI 将自动融合图 1 与图 2（主播手持/展示实体商品，9:16 2K 海报，人物五官与商品细节严格保真）。
                     </span>
                   ) : (
                     <span>
@@ -1002,7 +1002,7 @@ export function CoverView() {
                         : "text-slate-500 hover:text-slate-800 dark:text-slate-400"
                     )}
                   >
-                    9:16 (4K)
+                    9:16 (2K)
                   </button>
                   <button
                     type="button"
@@ -1046,7 +1046,9 @@ export function CoverView() {
             ) : (
               <ImagePlus className="mr-2 size-4.5" />
             )}
-            {busy ? `正在图生图 (${count} 张海报)…` : `开始 AI 图生图 (生成 ${count} 张 9:16 4K封面)`}
+            {busy
+              ? `正在图生图 (${count} 张海报)…`
+              : `开始 AI 图生图 (生成 ${count} 张 ${size === "1024x1536" ? "9:16 2K" : size === "1024x1024" ? "1:1" : "16:9 4K"}封面)`}
           </Button>
         </CardContent>
       </Card>

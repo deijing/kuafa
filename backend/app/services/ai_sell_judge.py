@@ -12,7 +12,9 @@ from app.services.sell_planner import (
     MagicCue,
     NarrativeBlock,
     PRICE_RE,
+    block_key,
     extract_narrative_blocks,
+    splice_opening,
 )
 
 
@@ -35,6 +37,7 @@ def ai_judge_sell_plan(
     *,
     target_seconds: float,
     variant: int = 0,
+    preferred_opening: NarrativeBlock | None = None,
 ) -> tuple[list[EditClip], list[MagicCue]] | None:
     """
     用 OpenAI 兼容模型（推荐 DeepSeek V4 Pro）从连贯话术叙事段落中做导演级主观精选与编排，
@@ -90,10 +93,17 @@ def ai_judge_sell_plan(
     if not candidate_blocks:
         return None
 
-    # 2. 准备给大模型的候选清单（保留上下文顺序与完整话术文本）
-    # 限制候选数量避免超上下文
+    # 2. 准备给大模型的候选清单；批量时把指定开场钉在池子前面，避免总选同一句开场白
     keep_n = min(30, len(candidate_blocks))
     pool = candidate_blocks[:keep_n]
+    if preferred_opening is not None:
+        pref_k = block_key(preferred_opening)
+        pool = [b for b in pool if block_key(b) != pref_k]
+        pool = [preferred_opening] + pool
+        pool = pool[:keep_n]
+    elif variant > 0 and len(pool) > 1:
+        rot = variant % len(pool)
+        pool = pool[rot:] + pool[:rot]
     id_map = {i: pool[i] for i in range(len(pool))}
 
     lines = []
@@ -103,12 +113,25 @@ def ai_judge_sell_plan(
             f"段落 {i} | 类型: {role_label} | 时长: {b.duration:.1f}秒\n完整口播: \"{b.text.strip()}\""
         )
 
+    opening_rule = ""
+    if preferred_opening is not None:
+        opening_rule = (
+            f"\n【开场强制差异化】这是批量成片第 {variant + 1} 条。"
+            "selected_block_ids 的第一项必须是段落 0（已为本条指定的独特开场），"
+            "不要换成其它更「常规」的开场白。"
+        )
+    elif variant > 0:
+        opening_rule = (
+            f"\n【开场差异化】variant={variant}，必须换一个与常见固定开场不同的 intro 段落作为第一条。"
+        )
+
     system = (
         "你是抖音/快手短视频资深带货剪辑导演。你的任务是从主播的候选连贯话术段落中，"
         "挑选并编排 2~4 个最具转化力、叙事连贯的段落，组合成一条节奏紧凑、逻辑完整的爆款带货成片。"
         "必须确保每个选中的段落语意完整、表达有始有终，严禁一句话说到一半就中断。只输出 JSON，不要解释。"
     )
     user = f"""目标成片约 {target_seconds:.0f} 秒。差异化版本号 variant={variant}。
+{opening_rule}
 
 候选连贯话术段落：
 {chr(10).join(lines)}
@@ -118,7 +141,6 @@ def ai_judge_sell_plan(
 2. 核心卖点深度种草（面料/版型/工艺/上身体验段落）
 3. 破价福利与逼单收尾（价格机制/优惠/催单行动段落）
 
-如果 variant>0，请特别注意换一个不同的开场段落（intro），保持多条视频的多样性。
 总时长尽量接近 {target_seconds:.0f} 秒（允许 0.75x～1.15x）。
 
 同时给出 2～3 条「神奇大字」屏幕提示（超短、有冲击力，适合抖音顶部弹字，如「主推爆款」「闭眼入」「破价秒杀」），每条不超过 8 个字。
@@ -228,7 +250,15 @@ selected_block_ids 必须来自候选段落编号，按播放顺序排列；afte
                     break
             t += max(0.2, clip.end - clip.start)
 
-    return final_clips, hooks[:4]
+    spliced = splice_opening(final_clips, preferred_opening)
+    if preferred_opening and spliced and final_clips:
+        old_first = (final_clips[0].path, round(final_clips[0].start, 2), round(final_clips[0].end, 2))
+        new_first = (spliced[0].path, round(spliced[0].start, 2), round(spliced[0].end, 2))
+        if old_first != new_first:
+            shift = preferred_opening.duration
+            for h in hooks:
+                h.at += shift
+    return spliced, hooks[:4]
 
 
 def collect_ai_candidates(

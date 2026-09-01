@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { Download, Loader2, Timeline, Trash2, Wand2, Image as ImageIcon } from "lucide-react"
+import { Download, Loader2, Sparkles, Timeline, Trash2, Wand2, Image as ImageIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ImagePreviewModal } from "@/components/ui/image-preview-modal"
@@ -19,9 +19,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { deleteJob, fetchJobs, type Job } from "@/lib/api"
+import { deleteJob, fetchJobs, generateJobCovers, type Job } from "@/lib/api"
 import { formatProcessingDuration } from "@/lib/utils"
 import { useMaterials } from "@/hooks/use-materials"
+import { useNotifications } from "@/hooks/use-notifications"
 
 function statusBadge(job: Job) {
   if (job.status === "succeeded") {
@@ -55,16 +56,45 @@ function statusBadge(job: Job) {
 
 export function HistoryView() {
   const navigate = useNavigate()
+  const { notify } = useNotifications()
   const { groups } = useMaterials()
   const [jobs, setJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [generatingCoverJobId, setGeneratingCoverJobId] = useState<string | null>(null)
 
   const groupById = useMemo(
     () => new Map(groups.map((g) => [g.id, g.name])),
     [groups]
   )
+
+  const handleQuickGenerateCovers = async (jobId: string) => {
+    if (!jobId || generatingCoverJobId) return
+    setGeneratingCoverJobId(jobId)
+    notify({
+      title: "开始生成 AI 封面",
+      message: "正在精选成片画面生成 3 张 9:16 2K 爆款封面…",
+      type: "info",
+    })
+    try {
+      const updated = await generateJobCovers(jobId, undefined, 3)
+      setJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)))
+      notify({
+        title: "封面生成完成",
+        message: "已成功为该成片生成 3 张 9:16 2K 爆款封面！",
+        type: "success",
+      })
+    } catch (err) {
+      notify({
+        title: "封面生成失败",
+        message: err instanceof Error ? err.message : "无法生成封面",
+        type: "error",
+      })
+    } finally {
+      setGeneratingCoverJobId(null)
+    }
+  }
 
   useEffect(() => {
     let alive = true
@@ -271,7 +301,24 @@ export function HistoryView() {
                             <ImageIcon className="size-3 text-amber-500" />
                             已存 ({job.covers.length})
                           </Button>
-                        ) : null}
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={generatingCoverJobId === job.id}
+                            onClick={() => void handleQuickGenerateCovers(job.id)}
+                            className="h-7 text-xs px-2.5 border-amber-200 text-amber-700 bg-amber-50/60 dark:bg-amber-950/40 dark:border-amber-900 dark:text-amber-400 hover:bg-amber-100 cursor-pointer gap-1"
+                            title="一键提取本片高光画面生成 3 张 9:16 2K 爆款封面"
+                          >
+                            {generatingCoverJobId === job.id ? (
+                              <Loader2 className="size-3 animate-spin text-amber-600" />
+                            ) : (
+                              <Sparkles className="size-3 text-amber-500" />
+                            )}
+                            生成封面
+                          </Button>
+                        )}
                         <Button size="sm" className="h-7 text-xs px-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium" asChild>
                           <a href={`/api/jobs/${job.id}/download`} download>
                             <Download className="mr-1 size-3" />

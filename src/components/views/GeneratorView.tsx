@@ -8,6 +8,7 @@ import {
   Info,
   Loader2,
   Plus,
+  RefreshCw,
   ShieldAlert,
   SlidersHorizontal,
   Upload,
@@ -40,6 +41,7 @@ import {
   fetchBgmFiles,
   fetchJob,
   fetchJobs,
+  generateJobCovers,
   uploadBgm,
   type BgmItem,
   type DurationPreference,
@@ -105,6 +107,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
   const [bgmLibraryList, setBgmLibraryList] = useState<BgmItem[]>([])
   const [selectedBgmMode, setSelectedBgmMode] = useState<string>("auto")
   const [uploadingBgm, setUploadingBgm] = useState(false)
+  const [isGeneratingCover, setIsGeneratingCover] = useState(false)
   const bgmFileInputRef = useRef<HTMLInputElement>(null)
 
   const loadBgmLibrary = useCallback(async () => {
@@ -281,6 +284,33 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
       setError(err instanceof Error ? err.message : "上传音频失败")
     } finally {
       setUploadingBgm(false)
+    }
+  }
+
+  const handleGenerateJobCovers = async (jobId: string) => {
+    if (!jobId || isGeneratingCover) return
+    setIsGeneratingCover(true)
+    notify({
+      title: "开始生成 AI 封面",
+      message: "正在智能精选成片高光帧，生成 3 张 9:16 2K 爆款封面…",
+      type: "info",
+    })
+    try {
+      const updated = await generateJobCovers(jobId, job?.headline || undefined, 3)
+      setJob(updated)
+      notify({
+        title: "爆款封面生成完成",
+        message: "已成功为该成片生成 3 张 9:16 2K 配套爆款封面！",
+        type: "success",
+      })
+    } catch (err) {
+      notify({
+        title: "封面生成失败",
+        message: err instanceof Error ? err.message : "生成封面失败，请检查配置",
+        type: "error",
+      })
+    } finally {
+      setIsGeneratingCover(false)
     }
   }
 
@@ -1221,26 +1251,44 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
               </div>
 
               {/* Generated Covers Panel */}
-              {job?.covers && job.covers.length > 0 && (
-                <div className="w-full md:w-[320px] shrink-0 border-t md:border-t-0 md:border-l border-slate-800 bg-slate-900/95 p-4 flex flex-col h-full overflow-hidden">
-                  <div className="flex items-center gap-2 mb-3 shrink-0 pb-2 border-b border-slate-800">
+              <div className="w-full md:w-[320px] shrink-0 border-t md:border-t-0 md:border-l border-slate-800 bg-slate-900/95 p-4 flex flex-col h-full overflow-hidden">
+                <div className="flex items-center justify-between gap-2 mb-3 shrink-0 pb-2 border-b border-slate-800">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <Sparkles className="size-4 text-amber-400 shrink-0" />
-                    <div>
+                    <div className="min-w-0">
                       <h4 className="text-xs font-bold text-slate-100">
-                        配套 9:16 封面 ({job.covers.length}张)
+                        配套 9:16 封面 ({job.covers?.length || 0}张)
                       </h4>
-                      {job.headline && (
-                        <p className="text-[11px] text-slate-400 truncate max-w-[200px]">
+                      {job.headline && job.covers && job.covers.length > 0 && (
+                        <p className="text-[11px] text-slate-400 truncate max-w-[180px]">
                           文案：「{job.headline}」
                         </p>
                       )}
                     </div>
                   </div>
+                  {job.covers && job.covers.length > 0 ? (
+                    <button
+                      type="button"
+                      disabled={isGeneratingCover}
+                      onClick={() => void handleGenerateJobCovers(job.id)}
+                      className="text-xs text-amber-400 hover:text-amber-300 font-medium flex items-center gap-1 cursor-pointer transition-colors shrink-0 disabled:opacity-50"
+                      title="重新生成一套封面"
+                    >
+                      {isGeneratingCover ? (
+                        <Loader2 className="size-3 animate-spin text-amber-400" />
+                      ) : (
+                        <RefreshCw className="size-3" />
+                      )}
+                      <span>换一组</span>
+                    </button>
+                  ) : null}
+                </div>
 
+                {job.covers && job.covers.length > 0 ? (
                   <div className="flex-1 overflow-y-auto space-y-3.5 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
                     {job.covers.map((cover, idx) => (
                       <div
-                        key={cover.id}
+                        key={cover.id || idx}
                         className="group relative flex flex-col rounded-xl border border-slate-800 bg-slate-950 p-2 transition-all hover:border-blue-500 shadow-sm"
                       >
                         <div
@@ -1285,8 +1333,34 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center p-4 gap-3">
+                    <div className="size-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                      <Sparkles className="size-6" />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <p className="text-xs font-bold text-slate-200">暂未生成配套封面</p>
+                      <p className="text-[11px] text-slate-400 leading-relaxed max-w-[210px]">
+                        点击下方按钮，基于成片高光帧与口播卖点智能生成 3 张 9:16 2K 爆款海报
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={isGeneratingCover}
+                      onClick={() => void handleGenerateJobCovers(job.id)}
+                      className="mt-1 w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-xs rounded-xl h-9 shadow-md shadow-amber-500/20 cursor-pointer flex items-center justify-center gap-1.5 border-none"
+                    >
+                      {isGeneratingCover ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="size-3.5" />
+                      )}
+                      {isGeneratingCover ? "正在生成 3 张封面…" : "✨ 一键生成 3 张配套爆款封面"}
+                    </Button>
+                  </div>
+                )}
+              </div>
             </div>
           ) : null}
 

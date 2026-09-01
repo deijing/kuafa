@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -97,6 +98,111 @@ class NarrativeBlock:
     @property
     def duration(self) -> float:
         return max(0.2, self.end - self.start)
+
+
+def block_key(block: NarrativeBlock) -> tuple[str, float, float]:
+    return (str(block.path), round(block.start, 2), round(block.end, 2))
+
+
+def opening_fingerprint(block: NarrativeBlock) -> str:
+    """开场口播指纹：同一句「家人们今天…」出现在不同切片里也算重复。"""
+    return re.sub(r"\s+", "", block.text or "")[:18]
+
+
+_OPENING_LOCK = threading.Lock()
+_OPENING_USED: dict[str, dict[str, set]] = {}
+
+
+def claim_variant_opening(
+    blocks: list[NarrativeBlock],
+    *,
+    variant: int,
+    batch_id: str | None = None,
+    randomize_intro: bool = True,
+) -> NarrativeBlock | None:
+    """
+    为批量成片锁定一个互不重复的开场段落：
+    优先换不同素材文件，再换同一文件里的不同 Hook。
+    同一 batch 内已用过的开场（含相同口播指纹）会被跳过。
+    """
+    if not blocks:
+        return None
+    if not randomize_intro and variant <= 0:
+        ranked = sorted(blocks, key=lambda b: b.total_score, reverse=True)
+        return ranked[0] if ranked else None
+
+    variant = max(0, int(variant))
+    by_src: dict[str, list[NarrativeBlock]] = {}
+    sources: list[str] = []
+    for b in blocks:
+        sp = str(b.path)
+        if sp not in by_src:
+            sources.append(sp)
+            by_src[sp] = []
+        by_src[sp].append(b)
+    for group in by_src.values():
+        group.sort(key=lambda b: b.total_score, reverse=True)
+
+    ranked: list[NarrativeBlock] = []
+    if len(sources) > 1:
+        rot_s = variant % len(sources)
+        src_order = sources[rot_s:] + sources[:rot_s]
+        inner = variant // len(sources)
+        for sp in src_order:
+            group = list(by_src[sp])
+            if variant > 0:
+                later = [b for b in group if b.start >= 18.0]
+                if later:
+                    group = later + [b for b in group if b.start < 18.0]
+            rot_i = inner % len(group)
+            ranked.extend(group[rot_i:] + group[:rot_i])
+    else:
+        items = list(by_src[sources[0]]) if sources else list(blocks)
+        if variant > 0:
+            later = [b for b in items if b.start >= 18.0]
+            if later:
+                items = later + [b for b in items if b.start < 18.0]
+        rot = variant % len(items)
+        if randomize_intro and variant == 0 and len(items) > 1:
+            rot = random.Random().randrange(len(items))
+        ranked = items[rot:] + items[:rot]
+
+    if not ranked:
+        return None
+    if not batch_id:
+        return ranked[0]
+
+    with _OPENING_LOCK:
+        if len(_OPENING_USED) > 48:
+            while len(_OPENING_USED) > 24:
+                _OPENING_USED.pop(next(iter(_OPENING_USED)))
+        used = _OPENING_USED.setdefault(batch_id, {"keys": set(), "fps": set()})
+        for b in ranked:
+            key = block_key(b)
+            fp = opening_fingerprint(b)
+            if key in used["keys"]:
+                continue
+            if fp and fp in used["fps"]:
+                continue
+            used["keys"].add(key)
+            if fp:
+                used["fps"].add(fp)
+            return b
+        chosen = ranked[0]
+        used["keys"].add(block_key(chosen))
+        fp = opening_fingerprint(chosen)
+        if fp:
+            used["fps"].add(fp)
+        return chosen
+
+
+def splice_opening(plan: list[EditClip], opening: NarrativeBlock | None) -> list[EditClip]:
+    """把指定开场段落钉在成片最前面，并去掉后面重复的同一段。"""
+    if not opening or not opening.clips:
+        return plan
+    keys = {(c.path, round(c.start, 2), round(c.end, 2)) for c in opening.clips}
+    rest = [c for c in plan if (c.path, round(c.start, 2), round(c.end, 2)) not in keys]
+    return list(opening.clips) + rest
 
 
 def is_negative_segment(text: str, rules: ExtractRules) -> bool:
@@ -273,6 +379,8 @@ def build_sell_plan(
     rules: ExtractRules | None = None,
     variant: int = 0,
     randomize_intro: bool = True,
+    batch_id: str | None = None,
+    forced_opening: NarrativeBlock | None = None,
 ) -> list[EditClip]:
     """
     智能构建高连贯性带货成片：
@@ -314,16 +422,14 @@ def build_sell_plan(
     feature_blocks.sort(key=lambda b: b.total_score, reverse=True)
     other_blocks.sort(key=lambda b: b.total_score, reverse=True)
 
-    # 针对不同版本轮换开场和卖点，实现批量多视频差异化
-    if hook_blocks:
-        if variant > 0:
-            rot = (variant * 2 + (random.randint(0, len(hook_blocks) - 1) if randomize_intro else 0)) % len(hook_blocks)
-        elif randomize_intro and len(hook_blocks) > 1:
-            top_candidates = min(4, len(hook_blocks))
-            rot = random.randrange(top_candidates)
-        else:
-            rot = 0
-        hook_blocks = hook_blocks[rot:] + hook_blocks[:rot]
+    opening_pool = hook_blocks or all_blocks
+    opening = forced_opening or claim_variant_opening(
+        opening_pool,
+        variant=variant,
+        batch_id=batch_id,
+        randomize_intro=randomize_intro,
+    )
+    opening_k = block_key(opening) if opening else None
 
     if price_blocks and variant > 0:
         rot_p = (variant * 3) % len(price_blocks)
@@ -339,7 +445,7 @@ def build_sell_plan(
 
     def try_add_block(b: NarrativeBlock) -> bool:
         nonlocal total_time
-        key = (str(b.path), round(b.start, 2), round(b.end, 2))
+        key = block_key(b)
         if key in used_block_keys:
             return False
         dur = b.duration
@@ -361,19 +467,25 @@ def build_sell_plan(
         hook_budget = target_seconds * (0.28 + ((variant % 3) - 1) * 0.04)
         price_budget = target_seconds * (0.30 + ((variant % 2) * 0.05))
 
-    # Step 1: 选取 1~2 个最抓人的开场段落 (Intro / Hook)
+    # Step 1: 先钉死差异化开场，再补其它 intro（不再按原片时间把开场冲回第一句）
+    if opening:
+        try_add_block(opening)
+
     for b in hook_blocks:
         if total_time >= hook_budget:
             break
+        if opening_k is not None and block_key(b) == opening_k:
+            continue
         try_add_block(b)
 
-    # 如果没有专属 hook，取第一个有声音的段落作为开场
+    # 如果没有专属 hook，取一个有声音的段落作为开场
     if not selected_blocks and all_blocks:
-        try_add_block(all_blocks[0])
+        try_add_block(opening or all_blocks[0])
 
     # Step 2: 选取核心卖点/产品细节段落 (Features & Details)
-    # 优先在同一素材或高分卖点段落中挑选
-    detail_candidates = feature_blocks + [b for b in hook_blocks if b not in selected_blocks]
+    detail_candidates = feature_blocks + [
+        b for b in hook_blocks if opening_k is None or block_key(b) != opening_k
+    ]
     for b in detail_candidates:
         if total_time >= target_seconds - price_budget:
             break
@@ -388,24 +500,37 @@ def build_sell_plan(
 
     # Step 4: 若时长仍不足，补充其他连贯段落
     if total_time < target_seconds * 0.75:
-        remaining_pool = [b for b in all_blocks if b not in selected_blocks]
+        remaining_pool = [b for b in all_blocks if block_key(b) not in used_block_keys]
         for b in remaining_pool:
             if total_time >= target_seconds:
                 break
             try_add_block(b)
 
-    # 3. 按带货逻辑编排最终段落顺序：
-    # [开场抓人段落] ➔ [核心卖点/上身体验段落] ➔ [价格/逼单/福利收尾段落]
-    intros = [b for b in selected_blocks if b.role == "intro"]
+    # 3. 开场段落固定第一，其余按带货逻辑编排：
+    # [差异化开场] ➔ [其它种草] ➔ [细节] ➔ [价格/逼单]
+    opening_selected = None
+    if opening_k is not None:
+        for b in selected_blocks:
+            if block_key(b) == opening_k:
+                opening_selected = b
+                break
+
+    intros = [
+        b
+        for b in selected_blocks
+        if b.role == "intro" and (opening_k is None or block_key(b) != opening_k)
+    ]
     prices = [b for b in selected_blocks if b.role == "price"]
     others = [b for b in selected_blocks if b.role == "filler"]
 
-    # 同一类别的段落按片内原时间顺序自然推进
     intros.sort(key=lambda b: (b.path.name, b.start))
     prices.sort(key=lambda b: (b.path.name, b.start))
     others.sort(key=lambda b: (b.path.name, b.start))
 
-    ordered_blocks = intros + others + prices
+    ordered_blocks: list[NarrativeBlock] = []
+    if opening_selected:
+        ordered_blocks.append(opening_selected)
+    ordered_blocks.extend(intros + others + prices)
 
     # 4. 展平为连续的 EditClip 列表，段落内部单句完全完整
     result_clips: list[EditClip] = []

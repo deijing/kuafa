@@ -15,16 +15,42 @@ export type ChangelogItem = {
   }[]
 }
 
-export const APP_VERSION = "v1.6.1"
-export const APP_BUILD_DATE = "2026-08-21"
+export const APP_VERSION = "v1.6.2"
+export const APP_BUILD_DATE = "2026-09-01"
 
 export const CHANGELOG_DATA: ChangelogItem[] = [
+  {
+    version: "v1.6.2",
+    date: "2026-09-01",
+    title: "封面规格 9:16 升级为 2K 超清 · 视频成片封面改为按需一键生成",
+    tag: "⚡ 算法优化",
+    isLatest: true,
+    highlights: [
+      "🖼️ 封面画幅规格升级：9:16 竖版封面统一调整为 2K 超清商业画质规格（1024×1536），生成更快更省",
+      "🎯 成片封面改为按需一键生成：生成视频时不再自动强制扣费生图，用户点击「一键生成封面」才生成",
+      "⚡ 单片与历史工作台快速生图：单片成片预览与历史记录列表均支持一键生成 3 张配套爆款封面与换一组",
+    ],
+    details: [
+      {
+        type: "feature",
+        text: "视频成片流程与封面生成彻底解耦：成片混剪时仅专注视频渲染与字幕烧录，生成速度大幅提升；用户可在成片完成后按需随时点击生成 3 张配套封面。",
+      },
+      {
+        type: "style",
+        text: "封面工作台与提示词优化：9:16 比例升级为 2K 超清商业摄影画质标准，保持主播面部通透与商品包装真实质感。",
+      },
+      {
+        type: "feature",
+        text: "成片预览与成片历史页面直通生成封面：未生成封面的成片提供高显眼的「✨ 一键生成 3 张配套爆款封面」按钮，已生成的成片支持一键「换一组」。",
+      },
+    ],
+  },
   {
     version: "v1.6.1",
     date: "2026-08-21",
     title: "成片音画精确对齐 · 说话静音修复 · 批量画质与任务启动崩溃修复",
     tag: "⚡ 算法优化",
-    isLatest: true,
+    isLatest: false,
     highlights: [
       "🎬 音画按同一时间轴裁切：用 trim / atrim 替代双 -ss，修复成片里人在说话却没有声音",
       "🔇 真停顿切断、短口播保留：融合缝隙收到 0.20s，不再把静音缝回去，也不再丢掉短句",
