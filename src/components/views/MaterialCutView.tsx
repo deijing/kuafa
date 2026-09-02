@@ -649,8 +649,15 @@ export function MaterialCutView({ onGoLibrary }: MaterialCutViewProps) {
         )
         createdJobsList = results
       } else {
+        const fullChunkCount = Math.floor(selectedMaterialIds.length / chunkSize)
+        if (fullChunkCount === 0) {
+          setError(`当前按每 ${chunkSize} 段/条分切，已选 ${chosenCount} 段素材不足 ${chunkSize} 段，无法生成完整视频`)
+          setBusy(false)
+          return
+        }
+
         const chunks: string[][] = []
-        for (let i = 0; i < selectedMaterialIds.length; i += chunkSize) {
+        for (let i = 0; i < fullChunkCount * chunkSize; i += chunkSize) {
           chunks.push(selectedMaterialIds.slice(i, i + chunkSize))
         }
 
@@ -983,26 +990,47 @@ export function MaterialCutView({ onGoLibrary }: MaterialCutViewProps) {
 
             {/* 如果选了 chunked */}
             {stitchMode === "chunked" && (
-              <div className="mt-2.5 flex items-center justify-between rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50/70 dark:bg-blue-950/40 px-3.5 py-2">
-                <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
-                  每几段素材生成 1 条：
-                </span>
-                <div className="flex items-center gap-1.5">
-                  {[3, 5, 8].map((cnt) => (
-                    <button
-                      key={cnt}
-                      type="button"
-                      onClick={() => setChunkSize(cnt)}
-                      className={cn(
-                        "px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors cursor-pointer",
-                        chunkSize === cnt
-                          ? "bg-blue-600 text-white border-blue-600 shadow-2xs"
-                          : "bg-white dark:bg-slate-800 text-slate-600 border-slate-200 hover:bg-slate-100"
+              <div className="mt-2.5 flex flex-col gap-2 rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50/70 dark:bg-blue-950/40 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                    每几段素材生成 1 条：
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {[2, 3, 4, 5, 6, 8].map((cnt) => (
+                      <button
+                        key={cnt}
+                        type="button"
+                        onClick={() => setChunkSize(cnt)}
+                        className={cn(
+                          "px-2 py-0.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer",
+                          chunkSize === cnt
+                            ? "bg-blue-600 text-white border-blue-600 shadow-2xs"
+                            : "bg-white dark:bg-slate-800 text-slate-600 border-slate-200 hover:bg-slate-100"
+                        )}
+                      >
+                        {cnt}段
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-blue-700 dark:text-blue-300 bg-blue-100/60 dark:bg-blue-900/40 rounded-lg p-2 font-medium leading-relaxed">
+                  {chosenCount === 0 ? (
+                    <span>请在右侧勾选素材（需满足至少 {chunkSize} 段）</span>
+                  ) : Math.floor(chosenCount / chunkSize) > 0 ? (
+                    <span>
+                      已选 <strong>{chosenCount}</strong> 段素材 ➔ 严格按 <strong>{chunkSize}</strong> 的倍数分切，将生成 <strong>{Math.floor(chosenCount / chunkSize)}</strong> 条视频
+                      {chosenCount % chunkSize > 0 && (
+                        <span className="text-amber-700 dark:text-amber-300 ml-1">
+                          (余下 {chosenCount % chunkSize} 段不足 {chunkSize} 段已自动忽略)
+                        </span>
                       )}
-                    >
-                      每 {cnt} 段
-                    </button>
-                  ))}
+                    </span>
+                  ) : (
+                    <span className="text-amber-700 dark:text-amber-300">
+                      已选 {chosenCount} 段素材不足 {chunkSize} 段，请在右侧至少勾选 {chunkSize} 段素材
+                    </span>
+                  )}
                 </div>
               </div>
             )}
@@ -1436,7 +1464,11 @@ export function MaterialCutView({ onGoLibrary }: MaterialCutViewProps) {
           <Button
             className="w-full h-11 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow-md transition-all cursor-pointer"
             onClick={startGenerate}
-            disabled={busy || chosenCount === 0}
+            disabled={
+              busy ||
+              chosenCount === 0 ||
+              (stitchMode === "chunked" && Math.floor(chosenCount / chunkSize) === 0)
+            }
           >
             {busy ? (
               <>
@@ -1446,7 +1478,13 @@ export function MaterialCutView({ onGoLibrary }: MaterialCutViewProps) {
             ) : (
               <>
                 <WandSparkles className="mr-2 size-4" />
-                开始按素材拼接 (包含全量 {chosenCount} 个素材)
+                {stitchMode === "all_in_one" && `开始按素材拼接 (全量 ${chosenCount} 段合成 1 条)`}
+                {stitchMode === "variants" && `开始生成 ${variantCount} 条版本 (每条覆盖 ${chosenCount} 段)`}
+                {stitchMode === "chunked" && (
+                  Math.floor(chosenCount / chunkSize) > 0
+                    ? `开始按每 ${chunkSize} 段生成 ${Math.floor(chosenCount / chunkSize)} 条成片`
+                    : `请至少勾选 ${chunkSize} 段素材`
+                )}
               </>
             )}
           </Button>
