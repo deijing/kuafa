@@ -420,10 +420,10 @@ class JobManager:
         total_available = len(all_materials)
         clips_per_video = req.clips_per_video
 
-        # 计算生成的任务条数：若用户设置了按 N 段切片，且素材充足，可自动计算条数
+        # 计算生成的任务条数：若用户设置了按 N 段切片，严格按 N 的整倍数计算任务数，忽略不足 N 段的余量
         job_count = req.count
-        if clips_per_video and clips_per_video > 0 and total_available > clips_per_video:
-            chunk_count = math.ceil(total_available / clips_per_video)
+        if clips_per_video and clips_per_video > 0 and total_available >= clips_per_video:
+            chunk_count = total_available // clips_per_video
             if req.count == 1:
                 job_count = chunk_count
 
@@ -454,13 +454,12 @@ class JobManager:
         for i in range(job_count):
             title = base_title if job_count == 1 else f"{base_title} #{i + 1}"
 
-            # 1. 拆分素材组合 (Sub-chunking)
-            if clips_per_video and clips_per_video > 0 and clips_per_video < total_available:
-                start_idx = (i * clips_per_video) % total_available
+            # 1. 拆分素材组合 (Sub-chunking: 严格按每 N 个素材分切)
+            if clips_per_video and clips_per_video > 0 and total_available >= clips_per_video:
+                start_idx = i * clips_per_video
                 selected_chunk = all_materials[start_idx : start_idx + clips_per_video]
                 if len(selected_chunk) < clips_per_video:
-                    needed = clips_per_video - len(selected_chunk)
-                    selected_chunk = selected_chunk + all_materials[:needed]
+                    continue
             else:
                 selected_chunk = list(all_materials)
 

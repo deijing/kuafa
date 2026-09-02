@@ -209,7 +209,7 @@ def fuse_and_pad_clips(
             continue
         last = curr_group[-1]
         gap = clip.start - last.end
-        if clip.path == last.path and 0.0 <= gap <= max_gap:
+        if clip.path == last.path and 0.0 <= gap <= max(max_gap, 2.5):
             curr_group.append(clip)
         else:
             groups.append(curr_group)

@@ -828,24 +828,13 @@ def build_material_coverage_plan(
             rot = (variant + mat_idx) % len(candidate_list)
             candidate_list = candidate_list[rot:] + candidate_list[:rot]
 
-        # 挑选契合 budget_per_mat 的段落（至少 1 个，最多填满 budget_per_mat * 1.3）
-        picked_for_this_mat: list[NarrativeBlock] = []
-        accum_time = 0.0
-
+        # 挑选契合 budget_per_mat 的【单一连续黄金段落】（确保每个素材严格只出场 1 次、1 段连续镜头，杜绝内部跳剪与碎剪）
+        best_block = candidate_list[0]
         for b in candidate_list:
-            if not picked_for_this_mat:
-                picked_for_this_mat.append(b)
-                accum_time += b.duration
-            else:
-                if accum_time + b.duration <= budget_per_mat * 1.35:
-                    picked_for_this_mat.append(b)
-                    accum_time += b.duration
-                if accum_time >= budget_per_mat:
-                    break
+            if abs(b.duration - budget_per_mat) < abs(best_block.duration - budget_per_mat):
+                best_block = b
 
-        # 按原片出现时间排序该素材内的段落，保持语意自然
-        picked_for_this_mat.sort(key=lambda b: b.start)
-        selected_blocks_per_material.append(picked_for_this_mat)
+        selected_blocks_per_material.append([best_block])
 
     # 3. 将各素材的选定段落按素材顺序拼接，并执行全局复读机去重
     final_clips: list[EditClip] = []
