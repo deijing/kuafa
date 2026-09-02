@@ -757,16 +757,6 @@ def build_material_coverage_plan(
         return []
 
     num_materials = len(clips)
-    if num_materials == 1:
-        return build_sell_plan(
-            clips,
-            target_seconds=target_seconds,
-            rules=rules,
-            variant=variant,
-            randomize_intro=randomize_intro,
-            batch_id=batch_id,
-        )
-
     budget_per_mat = max(3.0, target_seconds / num_materials)
     selected_blocks_per_material: list[list[NarrativeBlock]] = []
 
