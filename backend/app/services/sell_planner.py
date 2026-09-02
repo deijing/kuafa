@@ -289,6 +289,104 @@ def is_dangling_tail(text: str) -> bool:
     return False
 
 
+def heal_and_complete_block(
+    block: NarrativeBlock,
+    all_source_segs: list[TranscriptSegment],
+    max_extend_seconds: float = 8.0,
+) -> NarrativeBlock:
+    """
+    通用自适应边界自愈引擎：
+    1. 尾部完整性保护：若段落结尾处于未说完的话头/半截残句，自动向后寻找原片中相连的单句拼接完整；
+       若原片后方已无相连内容或超出上限，则精准回退修剪至前一个语义闭合句，绝不留半句话！
+    2. 头部完整性保护：若段落开头是孤立的连接词（如'而且/但是/所以'），向左寻找紧邻前一句补全主语/前提。
+    3. 彻底杜绝任何素材在任何剪辑模式下的掐头吞字或话说到一半被截断！
+    """
+    if not block.clips:
+        return block
+
+    clips = list(block.clips)
+    
+    # 1. 检查并修复尾部悬空（向后自愈接续）
+    last_text = clips[-1].text.strip()
+    if is_dangling_tail(last_text):
+        last_end = clips[-1].end
+        extended = False
+        subsequent = [s for s in all_source_segs if s.start >= last_end - 0.1]
+        accum_ext = 0.0
+        
+        for nxt in subsequent:
+            gap = max(0.0, nxt.start - last_end)
+            if gap > 1.8:
+                break
+            nxt_text = nxt.text.strip()
+            if not nxt_text:
+                continue
+            nxt_dur = max(0.2, nxt.end - nxt.start)
+            clips.append(
+                EditClip(
+                    path=block.path,
+                    start=nxt.start,
+                    end=nxt.end,
+                    text=nxt_text,
+                    role=block.role,
+                )
+            )
+            last_end = nxt.end
+            accum_ext += nxt_dur
+            if not is_dangling_tail(nxt_text):
+                extended = True
+                break
+            if accum_ext >= max_extend_seconds:
+                break
+        
+        # 若后继接续失败，安全回退修剪尾部残句
+        if not extended:
+            while len(clips) > 1 and is_dangling_tail(clips[-1].text):
+                clips.pop()
+
+    if not clips:
+        return block
+
+    # 2. 检查并修复头部孤立连接词
+    first_text = clips[0].text.strip()
+    if any(first_text.startswith(kw) for kw in ("而且", "并且", "但是", "但", "所以", "还有就是", "另外")):
+        first_start = clips[0].start
+        preceding = [s for s in all_source_segs if s.end <= first_start + 0.1]
+        if preceding:
+            prev_seg = preceding[-1]
+            if (first_start - prev_seg.end) <= 0.8:
+                prev_text = prev_seg.text.strip()
+                if prev_text:
+                    clips.insert(
+                        0,
+                        EditClip(
+                            path=block.path,
+                            start=prev_seg.start,
+                            end=prev_seg.end,
+                            text=prev_text,
+                            role=block.role,
+                        )
+                    )
+
+    new_start = clips[0].start
+    new_end = clips[-1].end
+    new_text = "".join(c.text.strip() for c in clips)
+
+    return NarrativeBlock(
+        path=block.path,
+        start=new_start,
+        end=new_end,
+        text=new_text,
+        clips=clips,
+        role=block.role,
+        hook_score=block.hook_score,
+        detail_score=block.detail_score,
+        price_score=block.price_score,
+        total_score=block.total_score,
+        source_index=block.source_index,
+    )
+
+
 def deduplicate_consecutive_clips(clips: list[EditClip]) -> list[EditClip]:
     """
     智能过滤成片中相邻或近邻的重复口播、复读机车轱辘话和无意义孤立短词（如'好吧'）。
@@ -855,10 +953,14 @@ def build_material_coverage_plan(
             candidate_list = candidate_list[rot:] + candidate_list[:rot]
 
         # 挑选契合 budget_per_mat 的【单一连续纯正讲品黄金段落】（确保每个素材严格只出场 1 次、1 段连续镜头，杜绝拖沓与闲聊）
+        # 先对候选段落应用通用边界自愈与语义闭环引擎
+        healed_candidates = [
+            heal_and_complete_block(b, segs) for b in candidate_list
+        ]
         valid_candidates = [
-            b for b in candidate_list
-            if b.total_score > 0 and (b.hook_score > 0 or b.detail_score > 0 or b.price_score > 0)
-        ] or candidate_list
+            b for b in healed_candidates
+            if b.total_score > 0 and (b.hook_score > 0 or b.detail_score > 0 or b.price_score > 0) and not is_dangling_tail(b.text)
+        ] or healed_candidates
 
         best_block = valid_candidates[0]
         for b in valid_candidates:
