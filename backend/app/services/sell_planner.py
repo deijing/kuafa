@@ -9,13 +9,16 @@ from pathlib import Path
 from app.services.transcription import _DANGLING_CONNECTIVES, TranscriptSegment
 
 PRICE_RE = re.compile(
-    r"(元|块钱|块|价格|只要|特价|秒杀|清仓|包邮|到手|券后|拍下|链接|优惠|打折|便宜|福利|逼单|库存|马上|下单|带走|拍一发|立省|省下|米)"
+    r"(元|块钱|块|米|价格|只要|到手|特价|秒杀|清仓|包邮|券后|拍下|优惠|打折|便宜|福利|逼单|现货|秒发|库存|马上|下单|带走|拍一发|立省|省下|手慢无|闭眼冲)"
 )
 INTRO_RE = re.compile(
-    r"(这款|今天|给大家|介绍|看看|面料|上身|版型|颜色|新款|搭配|质感|细节|推荐|特写|展示|姐妹们|宝宝们|看过来|主推|爆款|第一款|首发)"
+    r"(这款|今天|给你们|给大家|推荐|一眼|爆款|新款|王炸|宝藏|闭眼入|高级感|天花板|绝了|显白|显瘦|百搭|设计感|主推|看过来|第一款|首发|太好看|太绝了|姐妹们|一定要看|重磅|好物|测评|安利)"
 )
 DETAIL_RE = re.compile(
-    r"(面料|上身|版型|颜色|质感|细节|特写|展示|搭配|摸起来|手感|透气|显瘦|亲肤|柔软|耐穿|不起球|不掉色|做工|走线|刺绣|剪裁)"
+    r"(面料|纯棉|蚕丝|重磅|羊绒|真丝|天丝|亚麻|莫代尔|手感|软糯|亲肤|透气|不起球|不掉色|不褪色|垂感|抗皱|免烫|挺括|版型|立挺|正肩|落肩|收腰|遮肉|显瘦|显高|显腿长|包容性|走线|刺绣|双压线|包边|领口|袖口|下摆|纽扣|拉链|口袋|印花|水洗|做工|细节|特写|上身|穿搭|搭配|质感|不挑人|微弹|高弹|显档次|剪裁)"
+)
+SLUGGISH_CHITCHAT_RE = re.compile(
+    r"(先别急|等一下|听我说啊|我跟你们说|看评论区|刚才有人问|有人说|这个怎么讲|这个啊|怎么说呢|哎呀|是不是|对不对|好不好|行不行|你们觉得呢|稍等|等会儿|聊天|聊聊)"
 )
 
 DEFAULT_LIVE_PITCH_WORDS = (
@@ -384,36 +387,46 @@ def extract_narrative_blocks(
             hook_cnt = len(INTRO_RE.findall(b_text))
             detail_cnt = len(DETAIL_RE.findall(b_text))
             price_cnt = len(PRICE_RE.findall(b_text))
+            sluggish_cnt = len(SLUGGISH_CHITCHAT_RE.findall(b_text))
 
             # 确定段落的核心带货角色
             role = "filler"
-            if price_cnt > 0 and rules.bargain:
+            if price_cnt > 0 and rules.bargain and not rules.filter_price:
                 role = "price"
             elif hook_cnt > 0:
                 role = "intro"
+            elif detail_cnt > 0 and rules.detail:
+                role = "intro"
             elif detail_cnt > 0:
-                role = "intro" if rules.detail else "filler"
+                role = "filler"
 
             for c in cleaned_clips:
                 c.role = role
 
-            # 综合评分：优先选语速均匀、句意丰富、表达饱满（5~15s）的黄金段落
-            score = 0.0
+            # 纯正讲品密度（有效卖点词数 / 时长）
+            pitch_density = (detail_cnt * 3.0 + hook_cnt * 2.5 + price_cnt * 2.2) / max(1.0, dur)
+            score = pitch_density * 5.0
+
             if role == "price":
                 score += 5.0 + price_cnt * 1.5
             elif role == "intro":
-                score += 4.0 + hook_cnt * 1.2 + (detail_cnt * 0.8 if rules.detail else 0)
+                score += 4.5 + hook_cnt * 1.5 + (detail_cnt * 1.2 if rules.detail else 0)
             else:
-                score += 1.0 + detail_cnt * 0.5
+                score += (detail_cnt * 1.2) if rules.detail else 0.5
 
-            if 4.0 <= dur <= 14.0:
-                score += 2.0
-            elif dur < 2.5:
-                score -= 1.0
+            # 黄金快节奏时长奖励（3.5s ~ 9.0s 紧凑高能输出）
+            if 3.5 <= dur <= 9.0:
+                score += 3.5
+            elif dur > 13.0:
+                score -= 2.5
 
-            # 句数饱满加分（2~5句连贯叙事最佳）
-            if 2 <= len(cleaned_clips) <= 5:
-                score += 1.5
+            # 严厉惩罚拖沓、闲聊与无意义废话
+            if sluggish_cnt > 0:
+                score -= sluggish_cnt * 4.0
+
+            # 若完全无任何讲品关键词（纯口水话），大幅降分防止拖沓
+            if hook_cnt == 0 and detail_cnt == 0 and price_cnt == 0:
+                score -= 9.0
 
             blocks.append(
                 NarrativeBlock(
@@ -828,10 +841,17 @@ def build_material_coverage_plan(
             rot = (variant + mat_idx) % len(candidate_list)
             candidate_list = candidate_list[rot:] + candidate_list[:rot]
 
-        # 挑选契合 budget_per_mat 的【单一连续黄金段落】（确保每个素材严格只出场 1 次、1 段连续镜头，杜绝内部跳剪与碎剪）
-        best_block = candidate_list[0]
-        for b in candidate_list:
-            if abs(b.duration - budget_per_mat) < abs(best_block.duration - budget_per_mat):
+        # 挑选契合 budget_per_mat 的【单一连续纯正讲品黄金段落】（确保每个素材严格只出场 1 次、1 段连续镜头，杜绝拖沓与闲聊）
+        valid_candidates = [
+            b for b in candidate_list
+            if b.total_score > 0 and (b.hook_score > 0 or b.detail_score > 0 or b.price_score > 0)
+        ] or candidate_list
+
+        best_block = valid_candidates[0]
+        for b in valid_candidates:
+            b_score = b.total_score - abs(b.duration - budget_per_mat) * 0.35
+            best_score = best_block.total_score - abs(best_block.duration - budget_per_mat) * 0.35
+            if b_score > best_score:
                 best_block = b
 
         selected_blocks_per_material.append([best_block])
