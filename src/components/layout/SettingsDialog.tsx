@@ -1,13 +1,14 @@
-import { useEffect, useState } from "react"
 import {
   CheckCircle2,
   CircleAlert,
   Cloud,
   Cpu,
+  Download,
   ExternalLink,
   HardDrive,
   History,
   ImageIcon,
+  Loader2,
   Mic,
   RefreshCw,
   Settings,
@@ -15,6 +16,7 @@ import {
   Trash2,
   Zap,
 } from "lucide-react"
+import { useEffect, useState, useCallback, useRef } from "react"
 
 import { ChangelogDialog } from "@/components/layout/ChangelogDialog"
 import { APP_VERSION } from "@/data/changelog"
@@ -54,6 +56,9 @@ import { cn } from "@/lib/utils"
 import {
   fetchApiSecrets,
   fetchOpenAIModels,
+  fetchWhisperModels,
+  downloadWhisperModel,
+  fetchWhisperModelStatus,
   testCatsAPIConnection,
   testOpenAIConnection,
   testTranscriptionConnection,
@@ -64,6 +69,7 @@ import {
   type ReasoningEffort,
   type TranscriptionEngine,
   type TranscriptionTestResult,
+  type WhisperModelInfo,
 } from "@/lib/api"
 
 const REASONING_EFFORTS: {
@@ -78,17 +84,13 @@ const REASONING_EFFORTS: {
     { value: "max", label: "max" },
   ]
 
-const LOCAL_WHISPER_MODELS: {
-  value: string
-  label: string
-  desc: string
-}[] = [
-    { value: "tiny", label: "tiny · 极速轻量 (~75MB)", desc: "极速秒转 · 适合快速初剪与低配设备" },
-    { value: "base", label: "base · 均衡推荐 (~140MB)", desc: "速度与精度兼顾 · 默认推荐" },
-    { value: "small", label: "small · 高精增强 (~460MB)", desc: "复杂口音与嘈杂背景识别更准" },
-    { value: "medium", label: "medium · 专业进阶 (~1.5GB)", desc: "专业高精度输出" },
-    { value: "large-v3", label: "large-v3 · 旗舰顶配 (~3GB)", desc: "最高准确率与完整语义" },
-  ]
+const LOCAL_WHISPER_MODELS_FALLBACK: WhisperModelInfo[] = [
+  { name: "tiny", label: "Tiny (极速/39M)", size_label: "~75 MB", description: "内存占用极小，适合低配电脑", recommended: false, is_downloaded: true, model_path: null, is_downloading: false, download_status: "completed", download_message: "已下载", download_error: null },
+  { name: "base", label: "Base (标准/74M)", size_label: "~145 MB", description: "运行极快，适合日常离线测试", recommended: false, is_downloaded: true, model_path: null, is_downloading: false, download_status: "completed", download_message: "已下载", download_error: null },
+  { name: "small", label: "Small (进阶/244M)", size_label: "~480 MB", description: "词汇量大，带货识别准确率显著提高", recommended: true, is_downloaded: false, model_path: null, is_downloading: false, download_status: "idle", download_message: "未下载", download_error: null },
+  { name: "medium", label: "Medium (高精/769M)", size_label: "~1.5 GB", description: "高保真语义识别，复杂口播极准", recommended: false, is_downloaded: false, model_path: null, is_downloading: false, download_status: "idle", download_message: "未下载", download_error: null },
+  { name: "large-v3", label: "Large-v3 (旗舰/1550M)", size_label: "~3.1 GB", description: "顶级精度，中文与中英混说最强", recommended: false, is_downloaded: false, model_path: null, is_downloading: false, download_status: "idle", download_message: "未下载", download_error: null },
+]
 
 function normalizeEffort(raw: string | null | undefined): ReasoningEffort {
   if (raw === "off" || raw === "disabled") return "none"
@@ -115,8 +117,14 @@ export function SettingsDialog() {
 
   // 语音转译 ASR 模式
   const [transcriptionEngine, setTranscriptionEngine] =
-    useState<TranscriptionEngine>("local")
+    useState<TranscriptionEngine>("bcut")
   const [localWhisperModel, setLocalWhisperModel] = useState("base")
+  const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>(LOCAL_WHISPER_MODELS_FALLBACK)
+  const [loadingWhisperModels, setLoadingWhisperModels] = useState(false)
+  const [downloadingModel, setDownloadingModel] = useState<string | null>(null)
+  const pollTimerRef = useRef<number | null>(null)
+
+  const [burnSubtitlesDefault, setBurnSubtitlesDefault] = useState<boolean>(true)
   const [testingTranscription, setTestingTranscription] = useState(false)
   const [transcriptionTestResult, setTranscriptionTestResult] =
     useState<TranscriptionTestResult | null>(null)
@@ -138,6 +146,77 @@ export function SettingsDialog() {
   const [testingCatsapi, setTestingCatsapi] = useState(false)
   const [catsapiTestResult, setCatsapiTestResult] = useState<CatsAPITestResult | null>(null)
 
+  const loadWhisperModels = useCallback(async () => {
+    setLoadingWhisperModels(true)
+    try {
+      const list = await fetchWhisperModels()
+      if (Array.isArray(list) && list.length > 0) {
+        setWhisperModels(list)
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingWhisperModels(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) {
+        window.clearInterval(pollTimerRef.current)
+        pollTimerRef.current = null
+      }
+    }
+  }, [])
+
+  const handleDownloadModel = async (modelName: string) => {
+    setDownloadingModel(modelName)
+    setError(null)
+    setOk(null)
+    try {
+      const res = await downloadWhisperModel(modelName)
+      setWhisperModels((prev) =>
+        prev.map((m) => (m.name === modelName ? { ...m, ...res, is_downloading: true } : m))
+      )
+
+      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current)
+
+      pollTimerRef.current = window.setInterval(async () => {
+        try {
+          const st = await fetchWhisperModelStatus(modelName)
+          setWhisperModels((prev) =>
+            prev.map((m) => (m.name === modelName ? { ...m, ...st } : m))
+          )
+          if (st.is_downloaded || st.download_status === "completed") {
+            if (pollTimerRef.current) {
+              window.clearInterval(pollTimerRef.current)
+              pollTimerRef.current = null
+            }
+            setDownloadingModel(null)
+            setLocalWhisperModel(modelName)
+            setOk(`本地 Whisper 模型 [${st.label}] 已成功下载完成并就绪！`)
+          } else if (st.download_status === "failed") {
+            if (pollTimerRef.current) {
+              window.clearInterval(pollTimerRef.current)
+              pollTimerRef.current = null
+            }
+            setDownloadingModel(null)
+            setError(st.download_error || "下载模型失败，请检查网络连接")
+          }
+        } catch {
+          if (pollTimerRef.current) {
+            window.clearInterval(pollTimerRef.current)
+            pollTimerRef.current = null
+          }
+          setDownloadingModel(null)
+        }
+      }, 1500)
+    } catch (err) {
+      setDownloadingModel(null)
+      setError(err instanceof Error ? err.message : "触发下载模型失败")
+    }
+  }
+
   useEffect(() => {
     if (!open) return
     // 延迟到宏任务，避免在 effect 内同步触发 setState 造成级联渲染
@@ -155,12 +234,14 @@ export function SettingsDialog() {
       void fetchApiSecrets()
         .then((data) => {
           setStatus(data)
-          setTranscriptionEngine(data.transcription_engine || "local")
+          setTranscriptionEngine(data.transcription_engine || "bcut")
           setLocalWhisperModel(data.local_whisper_model || "base")
+          setBurnSubtitlesDefault(data.burn_subtitles_default !== false)
           setCatsapiBase(data.catsapi_base)
           setOpenaiBase(data.openai_base_url)
           setOpenaiModel(data.openai_model)
           setReasoningEffort(normalizeEffort(data.openai_reasoning_effort))
+          void loadWhisperModels()
         })
         .catch((err) => {
           setError(err instanceof Error ? err.message : "加载设置失败")
@@ -284,6 +365,7 @@ export function SettingsDialog() {
       const payload: Parameters<typeof updateApiSecrets>[0] = {
         transcription_engine: transcriptionEngine,
         local_whisper_model: localWhisperModel,
+        burn_subtitles_default: String(burnSubtitlesDefault),
         catsapi_base: catsapiBase.trim() || null,
         openai_base_url: openaiBase.trim() || null,
         openai_model: openaiModel.trim() || null,
@@ -453,9 +535,21 @@ export function SettingsDialog() {
                       {transcriptionEngine === "local" ? (
                         <>
                           <Field>
-                            <FieldLabel htmlFor="whisper-model" className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 block">
-                              本地 Whisper 模型
-                            </FieldLabel>
+                            <div className="flex items-center justify-between mb-1">
+                              <FieldLabel htmlFor="whisper-model" className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                                本地 Whisper 模型规格
+                              </FieldLabel>
+                              <button
+                                type="button"
+                                onClick={loadWhisperModels}
+                                disabled={loadingWhisperModels}
+                                className="flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer disabled:opacity-50"
+                                title="重新检测本地已下载的 Whisper 模型"
+                              >
+                                <RefreshCw className={cn("size-3", loadingWhisperModels && "animate-spin")} />
+                                <span>检测模型</span>
+                              </button>
+                            </div>
                             <Select
                               value={localWhisperModel}
                               onValueChange={(v) => {
@@ -470,11 +564,31 @@ export function SettingsDialog() {
                               </SelectTrigger>
                               <SelectContent className="rounded-xl border-slate-200 dark:border-slate-800 shadow-lg">
                                 <SelectGroup>
-                                  {LOCAL_WHISPER_MODELS.map((m) => (
-                                    <SelectItem key={m.value} value={m.value} className="text-xs rounded-lg">
-                                      <div className="flex flex-col text-left">
-                                        <span className="font-medium">{m.label}</span>
-                                        <span className="text-[10px] text-slate-400">{m.desc}</span>
+                                  {(whisperModels.length > 0 ? whisperModels : LOCAL_WHISPER_MODELS_FALLBACK).map((m) => (
+                                    <SelectItem key={m.name} value={m.name} className="text-xs rounded-lg py-1.5 cursor-pointer">
+                                      <div className="flex items-center justify-between w-full gap-3">
+                                        <div className="flex flex-col text-left">
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="font-semibold">{m.label}</span>
+                                            {m.recommended && (
+                                              <span className="text-[9px] bg-blue-100 dark:bg-blue-900/60 text-blue-600 dark:text-blue-300 px-1 py-0.2 rounded font-bold">
+                                                推荐
+                                              </span>
+                                            )}
+                                          </div>
+                                          <span className="text-[10px] text-slate-400">{m.description}</span>
+                                        </div>
+                                        <div className="shrink-0 flex items-center gap-1 text-[10px] ml-2">
+                                          {m.is_downloaded ? (
+                                            <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-0.5">
+                                              <CheckCircle2 className="size-3" /> 已就绪
+                                            </span>
+                                          ) : (
+                                            <span className="text-amber-500 dark:text-amber-400 font-medium">
+                                              未下载 ({m.size_label})
+                                            </span>
+                                          )}
+                                        </div>
                                       </div>
                                     </SelectItem>
                                   ))}
@@ -482,6 +596,80 @@ export function SettingsDialog() {
                               </SelectContent>
                             </Select>
                           </Field>
+
+                          {/* Selected Model Status Banner with Download Button */}
+                          {(() => {
+                            const cur = whisperModels.find((m) => m.name === localWhisperModel) || {
+                              name: localWhisperModel,
+                              label: localWhisperModel,
+                              size_label: "约 480 MB",
+                              is_downloaded: false,
+                              is_downloading: false,
+                              download_message: "",
+                              download_status: "idle",
+                            }
+                            const isDowning = cur.is_downloading || downloadingModel === cur.name
+
+                            return (
+                              <div
+                                className={cn(
+                                  "rounded-xl p-3 border transition-all text-xs flex items-center justify-between gap-2.5 shadow-2xs",
+                                  cur.is_downloaded
+                                    ? "bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-200/80 dark:border-emerald-900/40 text-emerald-900 dark:text-emerald-200"
+                                    : isDowning
+                                    ? "bg-blue-50/80 dark:bg-blue-950/30 border-blue-200 dark:border-blue-900/40 text-blue-900 dark:text-blue-200"
+                                    : "bg-amber-50/80 dark:bg-amber-950/30 border-amber-200/80 dark:border-amber-900/40 text-amber-900 dark:text-amber-200"
+                                )}
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  {cur.is_downloaded ? (
+                                    <CheckCircle2 className="size-4.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                  ) : isDowning ? (
+                                    <Loader2 className="size-4.5 text-blue-600 dark:text-blue-400 animate-spin shrink-0" />
+                                  ) : (
+                                    <CircleAlert className="size-4.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                                  )}
+                                  <div className="min-w-0 leading-tight">
+                                    <p className="font-semibold text-xs truncate">
+                                      {cur.is_downloaded
+                                        ? `模型已下载就绪 (${cur.size_label})`
+                                        : isDowning
+                                        ? `正在下载 ${cur.name} 权重…`
+                                        : `未检测到该本地模型 (${cur.size_label})`}
+                                    </p>
+                                    <p className="text-[10px] opacity-80 mt-0.5 truncate">
+                                      {cur.is_downloaded
+                                        ? "支持完全离线运行与零流量极速识别"
+                                        : isDowning
+                                        ? cur.download_message || "后台下载中，下载完成后自动激活…"
+                                        : "首次使用需下载模型权重文件，点击右侧按钮下载"}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {!cur.is_downloaded && (
+                                  <Button
+                                    size="sm"
+                                    className="h-7.5 px-3 text-xs font-bold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shrink-0 shadow-xs cursor-pointer flex items-center gap-1.5 transition-all"
+                                    disabled={isDowning}
+                                    onClick={() => handleDownloadModel(cur.name)}
+                                  >
+                                    {isDowning ? (
+                                      <>
+                                        <Loader2 className="size-3.5 animate-spin" />
+                                        下载中…
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Download className="size-3.5" />
+                                        一键下载
+                                      </>
+                                    )}
+                                  </Button>
+                                )}
+                              </div>
+                            )
+                          })()}
 
                           <div className="rounded-xl bg-slate-100/80 dark:bg-slate-800/60 p-2.5 border border-slate-200/60 dark:border-slate-700/60 flex items-start gap-2 text-[11px] text-slate-600 dark:text-slate-400">
                             <Cpu className="size-3.5 text-slate-500 mt-0.5 shrink-0" />
@@ -504,6 +692,72 @@ export function SettingsDialog() {
                           </div>
                         </div>
                       )}
+
+                      {/* 视频口播字幕烧录模式设置 */}
+                      <div className="space-y-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                            <Sparkles className="size-3.5 text-blue-600 dark:text-blue-400" />
+                            成片口播字幕烧录选项
+                          </label>
+                          <span className={cn(
+                            "text-[10px] font-bold px-2 py-0.5 rounded-full border",
+                            burnSubtitlesDefault
+                              ? "bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-900"
+                              : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700"
+                          )}>
+                            {burnSubtitlesDefault ? "✓ 已开启字幕" : "✕ 已关闭字幕"}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setBurnSubtitlesDefault(true)}
+                            className={cn(
+                              "flex flex-col items-start p-3 rounded-2xl border text-left transition-all cursor-pointer shadow-2xs relative",
+                              burnSubtitlesDefault
+                                ? "bg-blue-50/90 dark:bg-blue-950/50 border-blue-500 text-blue-950 dark:text-blue-200 ring-2 ring-blue-500/20"
+                                : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                            )}
+                          >
+                            <div className="flex items-center justify-between w-full">
+                              <span className="text-xs font-bold flex items-center gap-1.5">
+                                💬 打开字幕
+                              </span>
+                              {burnSubtitlesDefault && (
+                                <CheckCircle2 className="size-4 text-blue-600 dark:text-blue-400" />
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                              生成带货口播字幕，高位安全区动态弹出
+                            </p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setBurnSubtitlesDefault(false)}
+                            className={cn(
+                              "flex flex-col items-start p-3 rounded-2xl border text-left transition-all cursor-pointer shadow-2xs relative",
+                              !burnSubtitlesDefault
+                                ? "bg-blue-50/90 dark:bg-blue-950/50 border-blue-500 text-blue-950 dark:text-blue-200 ring-2 ring-blue-500/20"
+                                : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                            )}
+                          >
+                            <div className="flex items-center justify-between w-full">
+                              <span className="text-xs font-bold flex items-center gap-1.5">
+                                🚫 关闭字幕
+                              </span>
+                              {!burnSubtitlesDefault && (
+                                <CheckCircle2 className="size-4 text-blue-600 dark:text-blue-400" />
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                              生成纯净无字幕视频，画面不带任何字
+                            </p>
+                          </button>
+                        </div>
+                      </div>
 
                       {/* 测试按钮 */}
                       <div className="flex flex-wrap items-center gap-2.5 pt-0.5">

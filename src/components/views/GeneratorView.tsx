@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import {
   CirclePlay,
   Download,
+  FileText,
   Film,
   History,
   Info,
@@ -11,18 +12,22 @@ import {
   RefreshCw,
   ShieldAlert,
   SlidersHorizontal,
+  Sparkles,
+  Terminal,
   Upload,
   Volume2,
   Wand2,
   WandSparkles,
   X,
-  Sparkles,
+  XCircle,
   ZoomIn,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ImagePreviewModal } from "@/components/ui/image-preview-modal"
+import { SubtitleProofreaderModal } from "@/components/ui/subtitle-proofreader-modal"
+import { JobLogsModal } from "@/components/ui/job-logs-modal"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
@@ -38,17 +43,19 @@ import { useNotifications } from "@/hooks/use-notifications"
 import { useJobs } from "@/hooks/use-jobs"
 import {
   createGenerateJob,
+  fetchApiSecrets,
   fetchBgmFiles,
   fetchJob,
   fetchJobs,
   generateJobCovers,
+  retryJob,
   uploadBgm,
   type BgmItem,
   type DurationPreference,
   type Job,
   type VideoQuality,
 } from "@/lib/api"
-import { cn } from "@/lib/utils"
+import { cn, formatProcessingDuration } from "@/lib/utils"
 import { extractRules } from "@/data/extract-rules"
 
 const tones = [
@@ -123,6 +130,17 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
     void loadBgmLibrary()
   }, [loadBgmLibrary])
 
+  // 同步全局口播字幕默认开关
+  useEffect(() => {
+    void fetchApiSecrets()
+      .then((secrets) => {
+        if (secrets.burn_subtitles_default !== undefined) {
+          setAddSubtitles(secrets.burn_subtitles_default !== false)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
   const [clipsPerVideo, setClipsPerVideo] = useState<number | null>(5)
   const [shuffleClips, setShuffleClips] = useState<boolean>(true)
   const [deepDedup, setDeepDedup] = useState<boolean>(true)
@@ -154,6 +172,8 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
   const [job, setJob] = useState<Job | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isProofreaderOpen, setIsProofreaderOpen] = useState(false)
+  const [isLogModalOpen, setIsLogModalOpen] = useState(false)
   const userClearedRef = useRef(false)
 
   const [previewImages, setPreviewImages] = useState<string[]>([])
@@ -266,6 +286,36 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
     }, 800)
     return () => window.clearInterval(timer)
   }, [job, notify])
+
+  const [retryingJob, setRetryingJob] = useState(false)
+
+  async function handleRetryJob(jobId: string) {
+    if (retryingJob) return
+    setRetryingJob(true)
+    notify({
+      title: "正在恢复任务",
+      message: "正在以断点继续模式重试该生成任务（复用 ASR 缓存）…",
+      type: "info",
+    })
+    try {
+      const updated = await retryJob(jobId)
+      setJob(updated)
+      setBusy(true)
+      notify({
+        title: "任务已重新排队启动",
+        message: "正在断点继续渲染中…",
+        type: "success",
+      })
+    } catch (err) {
+      notify({
+        title: "重试失败",
+        message: err instanceof Error ? err.message : "无法恢复该任务",
+        type: "error",
+      })
+    } finally {
+      setRetryingJob(false)
+    }
+  }
 
   async function handleBgmUpload(file: File) {
     setUploadingBgm(true)
@@ -1140,16 +1190,19 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
               </button>
             </div>
           </CardHeader>
-          <CardContent className="flex flex-col gap-3.5 p-5">
-            <div className="relative flex items-center overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 p-4">
-              <div className="absolute top-0 bottom-0 left-[20%] z-10 w-0.5 bg-blue-600 shadow-[0_0_8px_rgba(37,99,235,0.5)]" />
+          <CardContent className="flex flex-col gap-3 p-4 md:p-5">
+            <div className="relative flex items-center overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 p-3.5 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-800">
+              {/* Timeline scrubber line with top glowing handle */}
+              <div className="absolute top-0 bottom-0 left-[22%] z-10 w-0.5 bg-gradient-to-b from-blue-400 via-blue-600 to-indigo-600 shadow-[0_0_10px_rgba(37,99,235,0.6)]">
+                <div className="absolute -top-1 -left-[3px] size-2 rounded-full bg-blue-500 ring-2 ring-white dark:ring-slate-900 shadow-sm" />
+              </div>
               <div className="flex h-20 min-w-max items-center gap-3">
                 {selected.length ? (
                   selected.map((clip, index) => (
                     <div
                       key={clip.id}
                       className={cn(
-                        "group relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-slate-200/80 dark:border-slate-700/80 shadow-2xs",
+                        "group relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-slate-200/90 dark:border-slate-700/80 shadow-2xs hover:scale-105 transition-all duration-200",
                         tones[index % tones.length]
                       )}
                       title={clip.filename}
@@ -1158,11 +1211,11 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                         <img
                           src={clip.thumb_url}
                           alt=""
-                          className="absolute inset-0 size-full object-cover opacity-90"
+                          className="absolute inset-0 size-full object-cover opacity-95 group-hover:scale-110 transition-transform duration-300"
                         />
                       ) : null}
-                      <span className="absolute bottom-1 left-1 rounded bg-[#111827]/80 px-1.5 py-0.5 text-[9px] font-bold font-mono text-white">
-                        {index + 1}
+                      <span className="absolute bottom-1 left-1 rounded-md bg-black/75 backdrop-blur-xs px-1.5 py-0.5 text-[9px] font-bold font-mono text-white border border-white/10">
+                        #{index + 1}
                       </span>
                     </div>
                   ))
@@ -1174,98 +1227,143 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                 )}
               </div>
             </div>
-            <p className="flex items-center gap-1.5 text-[13px] text-[#9CA3AF]">
-              <Info className="size-3.5 text-[#9CA3AF] shrink-0" />
-              必剪转写整句拼接：介绍商品 → 讲价格，输出 9:16 抖音成片。
-            </p>
+            <div className="flex items-center justify-between text-xs text-slate-400 dark:text-slate-500">
+              <span className="flex items-center gap-1.5 text-[12px]">
+                <Sparkles className="size-3 text-blue-500 shrink-0" />
+                云端必剪 ASR 极速切句 · 9:16 抖音标准带货画幅 · 智能消除气口与废话
+              </span>
+              {selected.length > 0 && (
+                <span className="text-[11px] font-mono font-medium text-slate-500">
+                  共 {selected.length} 个镜头切片
+                </span>
+              )}
+            </div>
           </CardContent>
         </Card>
 
         {/* Video Player / Light Studio Preview Area */}
-        <div className="relative flex min-h-[380px] flex-1 items-center justify-center overflow-hidden rounded-2xl border border-black/[0.04] dark:border-slate-800 bg-white dark:bg-slate-900 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
-          {showProcessing ? (
-            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
-              <div className="mb-4 text-4xl font-bold font-mono text-[#111827] dark:text-slate-100 tracking-tight">
-                {job?.progress ?? 0}%
-              </div>
-              <Loader2 className="mb-3 size-8 animate-spin text-blue-600" />
-              <p className="text-sm font-medium text-[#111827] dark:text-slate-100">
-                {job?.message || "准备中…"}
-              </p>
-              <p className="mt-2 text-xs text-[#9CA3AF]">
-                转写切句 → 9:16 拼接 → 字幕/BGM
-              </p>
-            </div>
-          ) : null}
-
-          {showFailed ? (
-            <div className="z-10 px-6 text-center">
-              <p className="mb-2 text-sm font-semibold text-rose-600">成片失败</p>
-              <p className="text-xs text-[#4B5563]">{job?.error}</p>
-            </div>
-          ) : null}
-
-          {showSuccess ? (
-            <div className="absolute inset-0 z-30 flex flex-col md:flex-row bg-slate-950 rounded-2xl overflow-hidden">
-              {/* Video Player */}
-              <div className="relative flex flex-1 items-center justify-center bg-black">
-                <video
-                  key={job.output_url}
-                  src={job.output_url!}
-                  controls
-                  className="size-full max-h-[85vh] object-contain"
-                />
-                <div className="absolute left-4 top-4 z-10 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 text-white backdrop-blur-md border border-white/10 text-xs">
-                  <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
-                  成片完成
-                </div>
-                <div className="absolute right-4 bottom-4 z-10 flex items-center gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => {
-                      const targetTitle = activeGroup ? `${activeGroup.name} · 成片` : `成片 ${job.id.slice(0, 8)}`
-                      navigate("/cover", {
-                        state: {
-                          refImageUrl: job.covers?.[0]?.url || (job.output_url ? `/api/jobs/${job.id}/thumb.jpg` : undefined),
-                          headline: job.headline || (activeGroup ? `${activeGroup.name} 爆款特惠！限时抢购` : "爆款特惠！限时抢购，错过再等一年！"),
-                          title: targetTitle,
-                          sourceJobId: job.id,
-                          videoUrl: job.output_url,
-                        },
-                      })
-                    }}
-                    className="bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow-lg rounded-xl flex items-center gap-1.5 cursor-pointer px-3 py-1.5"
-                    title="为此成片制作定制 AI 爆款大字报封面"
-                  >
-                    <Wand2 className="size-3.5" />
-                    <span>定制 AI 封面</span>
-                  </Button>
-                  <Button asChild size="sm" className="bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-lg rounded-xl text-xs px-3 py-1.5">
-                    <a href={`/api/jobs/${job.id}/download`} download>
-                      <Download className="mr-1.5 size-3.5" />
-                      下载成片
-                    </a>
-                  </Button>
-                </div>
+        {showSuccess && job ? (
+          <div className="flex flex-col w-full rounded-2xl overflow-hidden bg-slate-950/95 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 shadow-2xl animate-in fade-in-0 duration-300">
+            {/* 1. Top Studio Header Toolbar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 bg-slate-900/90 dark:bg-slate-900 border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-semibold">
+                  <span className="size-2 rounded-full bg-emerald-400 animate-pulse" />
+                  成片已完成
+                </span>
+                <span className="text-sm font-bold text-slate-100 truncate max-w-[220px]">
+                  {activeGroup?.name ? `${activeGroup.name} · 带货成片` : "智能带货成片"}
+                </span>
+                {job.duration ? (
+                  <span className="text-xs font-mono font-medium text-slate-300 bg-slate-800/90 px-2 py-0.5 rounded-md border border-slate-700/60 shrink-0">
+                    {Math.round(job.duration)} 秒
+                  </span>
+                ) : null}
+                {job.processing_seconds != null ? (
+                  <span className="text-xs text-slate-400 hidden sm:inline tabular-nums">
+                    处理耗时 {formatProcessingDuration(job.processing_seconds)}
+                  </span>
+                ) : null}
               </div>
 
-              {/* Generated Covers Panel */}
-              <div className="w-full md:w-[320px] shrink-0 border-t md:border-t-0 md:border-l border-slate-800 bg-slate-900/95 p-4 flex flex-col h-full overflow-hidden">
-                <div className="flex items-center justify-between gap-2 mb-3 shrink-0 pb-2 border-b border-slate-800">
+              {/* Right Action Buttons */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setIsProofreaderOpen(true)}
+                  className="h-8 rounded-xl bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200 hover:text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                  title="人工校验与修正口播字幕"
+                >
+                  <FileText className="size-3.5 text-blue-400" />
+                  <span>校验字幕</span>
+                </Button>
+
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    const targetTitle = activeGroup ? `${activeGroup.name} · 成片` : `成片 ${job.id.slice(0, 8)}`
+                    navigate("/cover", {
+                      state: {
+                        refImageUrl: job.covers?.[0]?.url || (job.output_url ? `/api/jobs/${job.id}/thumb.jpg` : undefined),
+                        headline: job.headline || (activeGroup ? `${activeGroup.name} 爆款特惠！限时抢购` : "爆款特惠！限时抢购，错过再等一年！"),
+                        title: targetTitle,
+                        sourceJobId: job.id,
+                        videoUrl: job.output_url,
+                      },
+                    })
+                  }}
+                  className="h-8 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-md cursor-pointer flex items-center gap-1.5 border-none transition-all"
+                  title="为此成片制作定制 AI 爆款大字报封面"
+                >
+                  <Wand2 className="size-3.5" />
+                  <span>定制 AI 封面</span>
+                </Button>
+
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setIsLogModalOpen(true)}
+                  className="h-8 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300 hover:text-white text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="查看任务实时执行日志"
+                >
+                  <Terminal className="size-3.5 text-slate-400" />
+                  <span>日志</span>
+                </Button>
+
+                <Button
+                  asChild
+                  size="sm"
+                  className="h-8 px-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md flex items-center gap-1.5 cursor-pointer border-none"
+                >
+                  <a href={`/api/jobs/${job.id}/download`} download>
+                    <Download className="size-3.5" />
+                    <span>下载 MP4</span>
+                  </a>
+                </Button>
+              </div>
+            </div>
+
+            {/* 2. Main Studio Stage: Phone Mockup Video Center + Right Covers Workspace */}
+            <div className="flex flex-col lg:flex-row flex-1 min-h-[540px] overflow-hidden">
+              {/* Left Stage: 9:16 Vertical Video Screen */}
+              <div className="relative flex flex-1 items-center justify-center p-6 md:p-8 bg-gradient-to-b from-slate-950 via-[#0B0F19] to-slate-950 overflow-hidden">
+                {/* Subtle ambient lighting backdrop */}
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(59,130,246,0.1)_0%,transparent_70%)] pointer-events-none" />
+
+                {/* 9:16 Vertical Smartphone Frame Mockup */}
+                <div className="relative flex flex-col items-center justify-center h-[520px] aspect-[9/16] rounded-2xl overflow-hidden bg-black shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] border border-slate-700/60 ring-1 ring-white/10 group">
+                  <video
+                    key={job.output_url}
+                    src={job.output_url!}
+                    controls
+                    autoPlay
+                    playsInline
+                    className="size-full object-contain"
+                  />
+                </div>
+              </div>
+
+              {/* Right Workspace: Companion 9:16 Covers */}
+              <div className="w-full lg:w-[320px] shrink-0 border-t lg:border-t-0 lg:border-l border-slate-800 bg-slate-900/95 p-4 flex flex-col justify-between overflow-hidden">
+                <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-800 shrink-0">
                   <div className="flex items-center gap-1.5 min-w-0">
                     <Sparkles className="size-4 text-amber-400 shrink-0" />
                     <div className="min-w-0">
                       <h4 className="text-xs font-bold text-slate-100">
                         配套 9:16 封面 ({job.covers?.length || 0}张)
                       </h4>
-                      {job.headline && job.covers && job.covers.length > 0 && (
+                      {job.headline && (
                         <p className="text-[11px] text-slate-400 truncate max-w-[180px]">
-                          文案：「{job.headline}」
+                          「{job.headline}」
                         </p>
                       )}
                     </div>
                   </div>
+
                   {job.covers && job.covers.length > 0 ? (
                     <button
                       type="button"
@@ -1285,7 +1383,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                 </div>
 
                 {job.covers && job.covers.length > 0 ? (
-                  <div className="flex-1 overflow-y-auto space-y-3.5 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
+                  <div className="flex-1 overflow-y-auto py-3 space-y-3 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
                     {job.covers.map((cover, idx) => (
                       <div
                         key={cover.id || idx}
@@ -1293,12 +1391,12 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                       >
                         <div
                           onClick={() => handleOpenPreview(job.covers!.map((c) => c.url), idx)}
-                          className="relative aspect-[9/16] w-full max-h-[340px] mx-auto overflow-hidden rounded-lg bg-slate-900 cursor-pointer shadow-inner"
+                          className="relative aspect-[9/16] w-full max-h-[260px] mx-auto overflow-hidden rounded-lg bg-slate-900 cursor-pointer shadow-inner"
                           title="点击放大预览"
                         >
                           <img
                             src={cover.url}
-                            alt=""
+                            alt={cover.headline || "配套封面"}
                             className="h-full w-full object-cover transition-transform group-hover:scale-105"
                           />
                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white gap-1">
@@ -1306,11 +1404,11 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                             <span className="text-xs font-semibold">放大预览</span>
                           </div>
                         </div>
-                        <div className="mt-2 flex items-center justify-between gap-1">
+                        <div className="mt-2 flex items-center justify-between gap-1 px-1">
                           <span className="text-[10px] font-medium text-slate-400">
                             封面 #{idx + 1}
                           </span>
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1.5">
                             <button
                               type="button"
                               onClick={() => handleOpenPreview(job.covers!.map((c) => c.url), idx)}
@@ -1323,7 +1421,7 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                             <a
                               href={cover.url}
                               download={`cover_${idx + 1}`}
-                              className="px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-medium flex items-center gap-1 cursor-pointer"
+                              className="px-2 py-0.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-medium flex items-center gap-1 cursor-pointer"
                             >
                               <Download className="size-2.5" />
                               下载
@@ -1334,14 +1432,14 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                     ))}
                   </div>
                 ) : (
-                  <div className="flex-1 flex flex-col items-center justify-center text-center p-4 gap-3">
-                    <div className="size-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
-                      <Sparkles className="size-6" />
+                  <div className="flex-1 flex flex-col items-center justify-center text-center p-6 gap-3.5 my-auto">
+                    <div className="size-14 rounded-2xl bg-gradient-to-tr from-amber-500/20 to-orange-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-inner">
+                      <Sparkles className="size-7" />
                     </div>
-                    <div className="flex flex-col gap-1">
-                      <p className="text-xs font-bold text-slate-200">暂未生成配套封面</p>
-                      <p className="text-[11px] text-slate-400 leading-relaxed max-w-[210px]">
-                        点击下方按钮，基于成片高光帧与口播卖点智能生成 3 张 9:16 2K 爆款海报
+                    <div className="flex flex-col gap-1.5">
+                      <p className="text-sm font-bold text-slate-100">暂无专属配套封面</p>
+                      <p className="text-xs text-slate-400 leading-relaxed max-w-[220px]">
+                        点击下方按钮，基于本片高光画面与口播卖点智能生成 3 张 9:16 2K 爆款大字报海报
                       </p>
                     </div>
                     <Button
@@ -1349,39 +1447,104 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                       size="sm"
                       disabled={isGeneratingCover}
                       onClick={() => void handleGenerateJobCovers(job.id)}
-                      className="mt-1 w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-xs rounded-xl h-9 shadow-md shadow-amber-500/20 cursor-pointer flex items-center justify-center gap-1.5 border-none"
+                      className="mt-2 w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-xs rounded-xl h-10 shadow-lg shadow-amber-500/25 cursor-pointer flex items-center justify-center gap-2 border-none transition-all hover:scale-[1.02]"
                     >
                       {isGeneratingCover ? (
-                        <Loader2 className="size-3.5 animate-spin" />
+                        <Loader2 className="size-4 animate-spin" />
                       ) : (
-                        <Sparkles className="size-3.5" />
+                        <Sparkles className="size-4" />
                       )}
-                      {isGeneratingCover ? "正在生成 3 张封面…" : "✨ 一键生成 3 张配套爆款封面"}
+                      <span>{isGeneratingCover ? "正在生成 3 张封面…" : "✨ 立即生成 3 张爆款封面"}</span>
                     </Button>
                   </div>
                 )}
               </div>
             </div>
-          ) : null}
+          </div>
+        ) : (
+          <div className="relative flex min-h-[420px] flex-1 items-center justify-center overflow-hidden rounded-2xl border border-black/[0.04] dark:border-slate-800 bg-white dark:bg-slate-900 shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
+            {showProcessing ? (
+              <div
+                className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-white/95 dark:bg-slate-900/95 backdrop-blur-md cursor-pointer group/gen-log"
+                onClick={() => setIsLogModalOpen(true)}
+                title="点击查看任务实时执行日志"
+              >
+                <div className="mb-4 text-4xl font-bold font-mono text-[#111827] dark:text-slate-100 tracking-tight">
+                  {job?.progress ?? 0}%
+                </div>
+                <Loader2 className="mb-3 size-8 animate-spin text-blue-600" />
+                <p className="text-sm font-medium text-[#111827] dark:text-slate-100">
+                  {job?.message || "准备中…"}
+                </p>
+                <p className="mt-2 text-xs text-[#9CA3AF]">
+                  转写切句 → 9:16 拼接 → 字幕/BGM
+                </p>
+                <span className="mt-3 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-300 text-xs font-medium hover:bg-blue-100 transition-colors flex items-center gap-1.5 shadow-xs">
+                  <Terminal className="size-3" />
+                  <span>查看实时流水日志</span>
+                </span>
+              </div>
+            ) : null}
 
-          {!showProcessing && !showSuccess && !showFailed ? (
-            <div className="z-10 flex flex-col items-center justify-center p-8 text-center max-w-sm">
-              <div className="relative mb-5 flex size-20 items-center justify-center rounded-2xl border border-blue-100 dark:border-blue-900/50 bg-blue-50/70 dark:bg-blue-950/40 shadow-xs">
-                <CirclePlay className="size-10 text-blue-600 dark:text-blue-400" />
+            {showFailed ? (
+              <div className="z-10 px-6 text-center flex flex-col items-center gap-3">
+                <div className="flex size-14 items-center justify-center rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-500 shadow-sm">
+                  <XCircle className="size-8" />
+                </div>
+                <div className="flex flex-col gap-1 max-w-md">
+                  <p className="text-base font-bold text-rose-600 dark:text-rose-400">成片生成失败</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed font-mono bg-slate-100 dark:bg-slate-800 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 max-h-24 overflow-y-auto">
+                    {job?.error || "生成过程中发生异常"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 mt-2 flex-wrap justify-center">
+                  {job && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-9 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center gap-2 shadow-sm cursor-pointer border-none"
+                      onClick={() => void handleRetryJob(job.id)}
+                      disabled={retryingJob}
+                    >
+                      <RefreshCw className={cn("size-3.5", retryingJob && "animate-spin")} />
+                      <span>{retryingJob ? "正在恢复任务…" : "断点继续重试"}</span>
+                    </Button>
+                  )}
+                  {job && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-9 px-3.5 rounded-xl border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
+                      onClick={() => setIsLogModalOpen(true)}
+                    >
+                      <Terminal className="size-3.5 text-rose-500" />
+                      <span>查看失败日志</span>
+                    </Button>
+                  )}
+                </div>
               </div>
-              <h3 className="mb-2 text-base font-semibold text-[#111827] dark:text-slate-100 tracking-tight">
-                实时成片预览区
-              </h3>
-              <p className="text-[13px] text-[#4B5563] dark:text-slate-400 leading-relaxed max-w-[280px]">
-                点击左侧 <span className="text-blue-600 dark:text-blue-400 font-medium">「一键智能成片」</span> 按钮，系统将根据所选规则自动生成抖音 9:16 高转化视频
-              </p>
-              <div className="mt-5 flex items-center gap-2 rounded-full border border-emerald-200/80 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/40 px-4 py-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
-                <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
-                智能引擎已就绪 · 等待触发
+            ) : null}
+
+            {!showProcessing && !showFailed ? (
+              <div className="z-10 flex flex-col items-center justify-center p-8 text-center max-w-sm">
+                <div className="relative mb-5 flex size-20 items-center justify-center rounded-2xl border border-blue-100 dark:border-blue-900/50 bg-blue-50/70 dark:bg-blue-950/40 shadow-xs">
+                  <CirclePlay className="size-10 text-blue-600 dark:text-blue-400" />
+                </div>
+                <h3 className="mb-2 text-base font-semibold text-[#111827] dark:text-slate-100 tracking-tight">
+                  实时成片预览区
+                </h3>
+                <p className="text-[13px] text-[#4B5563] dark:text-slate-400 leading-relaxed max-w-[280px]">
+                  点击左侧 <span className="text-blue-600 dark:text-blue-400 font-medium">「一键智能成片」</span> 按钮，系统将根据所选规则自动生成抖音 9:16 高转化视频
+                </p>
+                <div className="mt-5 flex items-center gap-2 rounded-full border border-emerald-200/80 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/40 px-4 py-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                  <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
+                  智能引擎已就绪 · 等待触发
+                </div>
               </div>
-            </div>
-          ) : null}
-        </div>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {/* Fullscreen Image Preview Lightbox Modal */}
@@ -1390,6 +1553,22 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
         onClose={() => setIsPreviewOpen(false)}
         images={previewImages}
         initialIndex={previewIndex}
+      />
+
+      {/* Subtitle Proofreader Modal */}
+      <SubtitleProofreaderModal
+        isOpen={isProofreaderOpen}
+        onClose={() => setIsProofreaderOpen(false)}
+        job={job}
+        onJobUpdated={(updated) => setJob(updated)}
+      />
+
+      {/* Real-time Job Execution Logs Modal */}
+      <JobLogsModal
+        open={isLogModalOpen}
+        onOpenChange={setIsLogModalOpen}
+        jobId={job?.id ?? null}
+        jobTitle={activeGroup?.name ? `${activeGroup.name} · 成片` : "带货成片"}
       />
     </div>
   )

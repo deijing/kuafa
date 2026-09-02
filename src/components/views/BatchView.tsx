@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CirclePlay,
   Download,
+  FileText,
   Film,
   Info,
   Layers,
@@ -15,9 +16,11 @@ import {
   ShieldAlert,
   SlidersHorizontal,
   Sparkles,
+  Terminal,
   Upload,
   Volume2,
   WandSparkles,
+  Trash2,
   X,
   XCircle,
   ZoomIn,
@@ -27,6 +30,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ImagePreviewModal } from "@/components/ui/image-preview-modal"
 import { VideoPreviewModal } from "@/components/ui/video-preview-modal"
+import { SubtitleProofreaderModal } from "@/components/ui/subtitle-proofreader-modal"
+import { JobLogsModal } from "@/components/ui/job-logs-modal"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
@@ -43,10 +48,14 @@ import { useNotifications } from "@/hooks/use-notifications"
 import { useJobs } from "@/hooks/use-jobs"
 import {
   createBatchJobs,
+  deleteJob,
   exportJobsZip,
+  fetchApiSecrets,
   fetchBgmFiles,
   fetchJobs,
   generateJobCovers,
+  retryJob,
+  retryJobsBatch,
   uploadBgm,
   type BatchGenerateResult,
   type BgmItem,
@@ -91,7 +100,7 @@ interface BatchViewProps {
 
 export function BatchView({ onGoLibrary }: BatchViewProps) {
   const { groups, loading } = useMaterials()
-  const { registerJobs } = useJobs()
+  const { registerJobs, jobs: globalJobs } = useJobs()
 
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
   const [countInput, setCountInput] = useState<string>("3")
@@ -122,6 +131,17 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
   useEffect(() => {
     void loadBgmLibrary()
   }, [loadBgmLibrary])
+
+  // 同步全局口播字幕默认开关
+  useEffect(() => {
+    void fetchApiSecrets()
+      .then((secrets) => {
+        if (secrets.burn_subtitles_default !== undefined) {
+          setAddSubtitles(secrets.burn_subtitles_default !== false)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const [clipsPerVideo, setClipsPerVideo] = useState<number | null>(5)
   const [shuffleClips, setShuffleClips] = useState<boolean>(true)
@@ -163,6 +183,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
 
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false)
   const [videoModalJobId, setVideoModalJobId] = useState<string | null>(null)
+  const [logJob, setLogJob] = useState<{ id: string; title: string } | null>(null)
 
   const handleOpenPreview = (imgs: string[], index = 0) => {
     setPreviewImages(imgs)
@@ -262,10 +283,38 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
   const [selectedExportJobIds, setSelectedExportJobIds] = useState<string[]>([])
   const coverStyle: CoverStyle = "yellow-red"
   const [exportingZip, setExportingZip] = useState(false)
+  const [proofreadingJob, setProofreadingJob] = useState<Job | null>(null)
 
   const [allHistoryJobs, setAllHistoryJobs] = useState<Job[]>([])
   const [currentBatchJobIds, setCurrentBatchJobIds] = useState<string[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string>("latest")
+
+  // 同步全局 JobsProvider 状态到当前批次视图与历史
+  useEffect(() => {
+    if (!globalJobs || !globalJobs.length) return
+    setAllHistoryJobs(globalJobs)
+    setJobs((prev) => {
+      if (!prev.length) return prev
+      const map = new Map(globalJobs.map((j) => [j.id, j]))
+      let changed = false
+      const next = prev.map((j) => {
+        const updated = map.get(j.id)
+        if (
+          updated &&
+          (updated.status !== j.status ||
+            updated.progress !== j.progress ||
+            updated.message !== j.message ||
+            updated.output_url !== j.output_url ||
+            updated.error !== j.error)
+        ) {
+          changed = true
+          return updated
+        }
+        return j
+      })
+      return changed ? next : prev
+    })
+  }, [globalJobs])
 
   const tabScrollRef = useRef<HTMLDivElement>(null)
   const isDraggingRef = useRef(false)
@@ -794,6 +843,96 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
     } catch (err) {
       setBusy(false)
       setError(err instanceof Error ? err.message : "创建批量任务失败")
+    }
+  }
+
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null)
+  const [retryingBatch, setRetryingBatch] = useState(false)
+
+  // 单条断点继续重试
+  async function handleRetryJob(jobId: string) {
+    if (retryingJobId) return
+    setRetryingJobId(jobId)
+    notify({
+      title: "正在恢复任务",
+      message: "正在以断点继续模式重试该成片任务（复用 ASR 缓存）…",
+      type: "info",
+    })
+    try {
+      const updated = await retryJob(jobId)
+      setJobs((prev) => {
+        const exists = prev.some((j) => j.id === jobId)
+        return exists ? prev.map((j) => (j.id === jobId ? updated : j)) : [updated, ...prev]
+      })
+      setAllHistoryJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)))
+      setBusy(true)
+      notify({
+        title: "任务已重新排队启动",
+        message: "正在断点继续渲染中…",
+        type: "success",
+      })
+    } catch (err) {
+      notify({
+        title: "重试失败",
+        message: err instanceof Error ? err.message : "无法恢复该任务",
+        type: "error",
+      })
+    } finally {
+      setRetryingJobId(null)
+    }
+  }
+
+  // 批量断点重试失败任务
+  async function handleRetryFailedBatch() {
+    const failedIds = displayedJobs.filter((j) => j.status === "failed").map((j) => j.id)
+    if (!failedIds.length || retryingBatch) return
+    setRetryingBatch(true)
+    notify({
+      title: "正在批量重试",
+      message: `正在批量以断点模式恢复 ${failedIds.length} 条失败任务…`,
+      type: "info",
+    })
+    try {
+      const res = await retryJobsBatch(failedIds)
+      if (res.jobs && res.jobs.length > 0) {
+        const retriedMap = new Map(res.jobs.map((j) => [j.id, j]))
+        setJobs((prev) => prev.map((j) => retriedMap.get(j.id) || j))
+        setAllHistoryJobs((prev) => prev.map((j) => retriedMap.get(j.id) || j))
+        setBusy(true)
+      }
+      notify({
+        title: "批量断点重试已启动",
+        message: `已重新排队 ${failedIds.length} 条任务！`,
+        type: "success",
+      })
+    } catch (err) {
+      notify({
+        title: "批量重试失败",
+        message: err instanceof Error ? err.message : "操作异常",
+        type: "error",
+      })
+    } finally {
+      setRetryingBatch(false)
+    }
+  }
+
+  // 删除单条成片记录
+  async function handleDeleteJob(jobId: string) {
+    try {
+      await deleteJob(jobId)
+      setJobs((prev) => prev.filter((j) => j.id !== jobId))
+      setAllHistoryJobs((prev) => prev.filter((j) => j.id !== jobId))
+      notify({
+        title: "任务已删除",
+        message: "已清理该任务记录及相关工程文件",
+        type: "info",
+      })
+    } catch (err) {
+      notify({
+        title: "删除失败",
+        message: err instanceof Error ? err.message : "无法删除",
+        type: "error",
+      })
     }
   }
 
@@ -1822,6 +1961,24 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                   新建批次
                 </Button>
 
+                {displayedJobs.some((j) => j.status === "failed") ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={retryingBatch}
+                    onClick={() => void handleRetryFailedBatch()}
+                    className="h-8 px-3 text-xs font-semibold border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-300 hover:bg-rose-100 cursor-pointer gap-1.5 rounded-xl"
+                  >
+                    <RefreshCw className={cn("size-3.5 text-rose-500", retryingBatch && "animate-spin")} />
+                    <span>
+                      {retryingBatch
+                        ? "正在恢复…"
+                        : `一键重试失败任务 (${displayedJobs.filter((j) => j.status === "failed").length})`}
+                    </span>
+                  </Button>
+                ) : null}
+
                 {displayedJobs.some((j) => j.status === "succeeded") ? (
                   <Button
                     type="button"
@@ -1961,10 +2118,22 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                           <div className="size-full flex flex-col items-center justify-center p-4 text-center relative">
                             <div className="absolute inset-0 bg-gradient-to-r from-blue-600/10 via-indigo-600/15 to-blue-600/10 animate-pulse" />
                             {/* Top badges */}
-                            <div className="absolute top-2.5 left-2.5 z-10">
+                            <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5">
                               <span className="px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-md text-white text-[11px] font-mono font-bold border border-white/10">
                                 #{index + 1}
                               </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setLogJob({ id: job.id, title: `${groupName} · 成片 #${index + 1}` })
+                                }}
+                                className="px-1.5 py-0.5 rounded-md bg-black/60 hover:bg-blue-600/80 backdrop-blur-md text-slate-200 hover:text-white text-[10px] font-medium border border-white/10 transition-colors cursor-pointer flex items-center gap-1"
+                                title="查看实时执行日志"
+                              >
+                                <Terminal className="size-3" />
+                                <span>日志</span>
+                              </button>
                             </div>
                             <div className="absolute top-2.5 right-2.5 z-10">
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-600/90 backdrop-blur-md text-white text-[11px] font-semibold shadow-sm animate-pulse">
@@ -1973,21 +2142,46 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                               </span>
                             </div>
 
-                            <Loader2 className="size-8 animate-spin text-blue-500 mb-2 z-10" />
-                            <span className="text-base font-mono font-bold text-white z-10 tracking-tight">
-                              {job.progress}%
-                            </span>
-                            <span className="text-xs text-slate-400 mt-1 z-10 max-w-[85%] truncate">
-                              {job.message || "正在智能合成剪辑中…"}
-                            </span>
+                            <div
+                              className="flex flex-col items-center justify-center size-full cursor-pointer group/active-log"
+                              onClick={() => setLogJob({ id: job.id, title: `${groupName} · 成片 #${index + 1}` })}
+                              title="点击查看实时执行流水"
+                            >
+                              <Loader2 className="size-8 animate-spin text-blue-500 mb-2 z-10" />
+                              <span className="text-base font-mono font-bold text-white z-10 tracking-tight">
+                                {job.progress}%
+                              </span>
+                              <span className="text-xs text-slate-400 mt-1 z-10 max-w-[85%] truncate">
+                                {job.message || "正在智能合成剪辑中…"}
+                              </span>
+                              <span className="text-[10px] text-blue-400 opacity-80 group-hover/active-log:opacity-100 flex items-center gap-1 mt-1 bg-blue-950/80 px-2 py-0.5 rounded-full border border-blue-800/60 z-10">
+                                <Terminal className="size-2.5" /> 查看实时流水
+                              </span>
+                            </div>
                           </div>
                         ) : (
                           /* Failed State */
-                          <div className="size-full flex flex-col items-center justify-center p-4 text-center bg-rose-950/40 relative">
-                            <div className="absolute top-2.5 left-2.5 z-10">
+                          <div
+                            className="size-full flex flex-col items-center justify-center p-4 text-center bg-rose-950/40 relative cursor-pointer group/fail-log"
+                            onClick={() => setLogJob({ id: job.id, title: `${groupName} · 成片 #${index + 1}` })}
+                            title="点击查看失败详细日志"
+                          >
+                            <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5">
                               <span className="px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-md text-white text-[11px] font-mono font-bold border border-white/10">
                                 #{index + 1}
                               </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setLogJob({ id: job.id, title: `${groupName} · 成片 #${index + 1}` })
+                                }}
+                                className="px-1.5 py-0.5 rounded-md bg-black/60 hover:bg-rose-600/80 backdrop-blur-md text-slate-200 hover:text-white text-[10px] font-medium border border-white/10 transition-colors cursor-pointer flex items-center gap-1"
+                                title="查看执行日志"
+                              >
+                                <Terminal className="size-3" />
+                                <span>日志</span>
+                              </button>
                             </div>
                             <div className="absolute top-2.5 right-2.5 z-10">
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-600 backdrop-blur-md text-white text-[11px] font-semibold shadow-sm">
@@ -1998,6 +2192,9 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                             <XCircle className="size-8 text-rose-400 mb-2" />
                             <span className="text-xs text-rose-300 max-w-[85%] line-clamp-2">
                               {job.error || "生成失败"}
+                            </span>
+                            <span className="text-[10px] text-rose-300 opacity-90 group-hover/fail-log:opacity-100 flex items-center gap-1 mt-1 bg-rose-950/80 px-2 py-0.5 rounded-full border border-rose-800/60 z-10">
+                              <Terminal className="size-2.5" /> 查看详细日志
                             </span>
                           </div>
                         )}
@@ -2071,24 +2268,20 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                                       onClick={(e) => {
                                         e.stopPropagation()
                                         handleOpenPreview(
-                                          coversList.map((item) => item.url),
+                                          coversList.map((c) => c.url),
                                           idx
                                         )
                                       }}
-                                      className="group/cov relative aspect-[9/16] w-full rounded-lg overflow-hidden border border-slate-200/80 dark:border-slate-700 bg-black cursor-pointer shadow-2xs hover:ring-2 hover:ring-blue-500 transition-all"
-                                      title={cover.headline ? `【${cover.headline}】· 点击放大预览` : "点击放大预览封面"}
+                                      className="group/cov relative aspect-[3/4] rounded-lg overflow-hidden border border-slate-200/80 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 shadow-2xs hover:shadow-sm cursor-pointer transition-all hover:scale-[1.03]"
                                     >
                                       <img
                                         src={cover.url}
-                                        alt={`封面 #${idx + 1}`}
-                                        className="size-full object-cover transition-transform duration-300 group-hover/cov:scale-105"
+                                        alt={cover.headline || "成片封面"}
+                                        className="size-full object-cover"
                                       />
-                                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/cov:opacity-100 transition-opacity flex items-center justify-center text-white backdrop-blur-2xs">
-                                        <ZoomIn className="size-3.5" />
+                                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/cov:opacity-100 flex items-center justify-center transition-opacity">
+                                        <ZoomIn className="size-3.5 text-white" />
                                       </div>
-                                      <span className="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/70 text-white text-[8px] font-mono font-medium">
-                                        #{idx + 1}
-                                      </span>
                                     </div>
                                   ))}
                                 </div>
@@ -2116,33 +2309,75 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                       </div>
                     </div>
 
-                    {/* 3. Card Action Footer */}
-                    {done && job.output_url ? (
-                      <div className="flex items-center gap-2.5 p-4 pt-0">
+                    {/* 3. Card Actions Footer */}
+                    {done ? (
+                      <div className="flex items-center gap-2 p-4 pt-0">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleOpenVideoPreview(job.id)
+                          }}
+                          className="flex-1 h-8 rounded-xl bg-blue-50/70 hover:bg-blue-100/80 dark:bg-blue-950/40 dark:hover:bg-blue-900/60 text-blue-600 dark:text-blue-400 font-semibold text-xs border border-blue-200/80 dark:border-blue-900/60 cursor-pointer flex items-center justify-center gap-1 shadow-2xs whitespace-nowrap"
+                        >
+                          <CirclePlay className="size-3.5" />
+                          <span>预览</span>
+                        </Button>
+
                         <Button
                           type="button"
                           size="sm"
                           variant="outline"
                           onClick={(e) => {
                             e.stopPropagation()
-                            handleOpenVideoPreview(job.id)
+                            setProofreadingJob(job)
                           }}
-                          className="flex-1 h-8.5 rounded-xl bg-blue-50/70 hover:bg-blue-100/80 dark:bg-blue-950/40 dark:hover:bg-blue-900/60 text-blue-600 dark:text-blue-400 font-semibold text-xs border border-blue-200/80 dark:border-blue-900/60 cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs whitespace-nowrap"
+                          className="flex-1 h-8 rounded-xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs border border-slate-200/80 dark:border-slate-700 cursor-pointer flex items-center justify-center gap-1 shadow-2xs whitespace-nowrap"
                         >
-                          <CirclePlay className="size-3.5" />
-                          <span>大屏预览</span>
+                          <FileText className="size-3.5 text-blue-500" />
+                          <span>校验字幕</span>
                         </Button>
 
                         <a
                           href={`/api/jobs/${job.id}/download`}
                           download
                           onClick={(e) => e.stopPropagation()}
-                          className="flex-1 h-8.5 px-3 rounded-xl bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shadow-2xs"
+                          className="flex-1 h-8 px-2.5 rounded-xl bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 font-semibold text-xs flex items-center justify-center gap-1 transition-colors cursor-pointer whitespace-nowrap shadow-2xs"
                           title="下载 MP4 视频文件"
                         >
                           <Download className="size-3.5" />
-                          <span>下载 MP4</span>
+                          <span>下载</span>
                         </a>
+                      </div>
+                    ) : !done && !active ? (
+                      <div className="flex items-center gap-2 p-4 pt-0">
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="flex-1 h-8 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs border-none cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleRetryJob(job.id)
+                          }}
+                          disabled={retryingJobId === job.id}
+                        >
+                          <RefreshCw className={cn("size-3.5", retryingJobId === job.id && "animate-spin")} />
+                          <span>{retryingJobId === job.id ? "正在恢复…" : "断点继续重试"}</span>
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 px-2.5 text-xs text-rose-500 hover:bg-rose-100 dark:hover:bg-rose-900/40 rounded-xl cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleDeleteJob(job.id)
+                          }}
+                          title="删除此失败任务"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
                       </div>
                     ) : null}
                   </div>
@@ -2198,6 +2433,10 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
         isGeneratingCovers={busy || coverLoadingJobId !== null}
         generatingJobId={coverLoadingJobId}
         onOpenImagePreview={handleOpenPreview}
+        onJobUpdated={(updated) => {
+          setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)))
+          setAllHistoryJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)))
+        }}
       />
 
       {/* Fullscreen Image Preview Lightbox Modal */}
@@ -2206,6 +2445,25 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
         onClose={() => setIsPreviewOpen(false)}
         images={previewImages}
         initialIndex={previewIndex}
+      />
+
+      {/* Subtitle Proofreader Modal */}
+      <SubtitleProofreaderModal
+        isOpen={proofreadingJob !== null}
+        onClose={() => setProofreadingJob(null)}
+        job={proofreadingJob}
+        onJobUpdated={(updated) => {
+          setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)))
+          setAllHistoryJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)))
+        }}
+      />
+
+      {/* Real-time Job Execution Logs Modal */}
+      <JobLogsModal
+        open={logJob !== null}
+        onOpenChange={(open) => !open && setLogJob(null)}
+        jobId={logJob?.id ?? null}
+        jobTitle={logJob?.title}
       />
     </div>
   )

@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { Download, Loader2, Sparkles, Timeline, Trash2, Wand2, Image as ImageIcon } from "lucide-react"
+import { Download, FileText, Loader2, RefreshCw, Sparkles, Terminal, Timeline, Trash2, Wand2, Image as ImageIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ImagePreviewModal } from "@/components/ui/image-preview-modal"
+import { SubtitleProofreaderModal } from "@/components/ui/subtitle-proofreader-modal"
+import { JobLogsModal } from "@/components/ui/job-logs-modal"
 import {
   Empty,
   EmptyDescription,
@@ -19,8 +21,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { deleteJob, fetchJobs, generateJobCovers, type Job } from "@/lib/api"
-import { formatProcessingDuration } from "@/lib/utils"
+import { deleteJob, fetchJobs, generateJobCovers, retryJob, type Job } from "@/lib/api"
+import { cn, formatProcessingDuration } from "@/lib/utils"
 import { useMaterials } from "@/hooks/use-materials"
 import { useNotifications } from "@/hooks/use-notifications"
 
@@ -63,11 +65,41 @@ export function HistoryView() {
   const [error, setError] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [generatingCoverJobId, setGeneratingCoverJobId] = useState<string | null>(null)
+  const [proofreadingJob, setProofreadingJob] = useState<Job | null>(null)
+  const [retryingId, setRetryingId] = useState<string | null>(null)
+  const [logJob, setLogJob] = useState<{ id: string; title: string } | null>(null)
 
   const groupById = useMemo(
     () => new Map(groups.map((g) => [g.id, g.name])),
     [groups]
   )
+
+  const handleRetry = async (jobId: string) => {
+    if (!jobId || retryingId) return
+    setRetryingId(jobId)
+    notify({
+      title: "正在恢复任务",
+      message: "正在以断点继续模式重试该生成任务（复用 ASR 缓存）…",
+      type: "info",
+    })
+    try {
+      const updated = await retryJob(jobId)
+      setJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)))
+      notify({
+        title: "任务已重新排队启动",
+        message: "正在断点继续渲染中…",
+        type: "success",
+      })
+    } catch (err) {
+      notify({
+        title: "重试失败",
+        message: err instanceof Error ? err.message : "无法恢复该任务",
+        type: "error",
+      })
+    } finally {
+      setRetryingId(null)
+    }
+  }
 
   const handleQuickGenerateCovers = async (jobId: string) => {
     if (!jobId || generatingCoverJobId) return
@@ -319,6 +351,33 @@ export function HistoryView() {
                             生成封面
                           </Button>
                         )}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setProofreadingJob(job)}
+                          className="h-7 text-xs px-2.5 border-blue-200 text-blue-700 bg-blue-50/60 dark:bg-blue-950/40 dark:border-blue-900 dark:text-blue-300 hover:bg-blue-100 cursor-pointer gap-1"
+                          title="人工校验与修正口播字幕"
+                        >
+                          <FileText className="size-3 text-blue-600 dark:text-blue-400" />
+                          校验字幕
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const jobTitle = job.group_id && groupById.get(job.group_id)
+                              ? `${groupById.get(job.group_id)} · 成片`
+                              : `成片 ${job.id.slice(0, 8)}`
+                            setLogJob({ id: job.id, title: jobTitle })
+                          }}
+                          className="h-7 text-xs px-2 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 cursor-pointer gap-1"
+                          title="查看此任务实时执行日志"
+                        >
+                          <Terminal className="size-3 text-slate-500" />
+                          <span>日志</span>
+                        </Button>
                         <Button size="sm" className="h-7 text-xs px-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium" asChild>
                           <a href={`/api/jobs/${job.id}/download`} download>
                             <Download className="mr-1 size-3" />
@@ -327,9 +386,40 @@ export function HistoryView() {
                         </Button>
                       </>
                     ) : (
-                      <span className="text-xs text-slate-400">
-                        {job.message}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-slate-400 max-w-[140px] truncate" title={job.error || job.message}>
+                          {job.error || job.message}
+                        </span>
+                        {job.status === "failed" && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => void handleRetry(job.id)}
+                            disabled={retryingId === job.id}
+                            className="h-7 text-xs px-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium cursor-pointer gap-1 shadow-2xs"
+                            title="断点继续重试此生成任务"
+                          >
+                            <RefreshCw className={cn("size-3", retryingId === job.id && "animate-spin")} />
+                            <span>{retryingId === job.id ? "恢复中…" : "断点重试"}</span>
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const jobTitle = job.group_id && groupById.get(job.group_id)
+                              ? `${groupById.get(job.group_id)} · 成片`
+                              : `成片 ${job.id.slice(0, 8)}`
+                            setLogJob({ id: job.id, title: jobTitle })
+                          }}
+                          className="h-7 text-xs px-2 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 cursor-pointer gap-1"
+                          title="查看此任务执行日志"
+                        >
+                          <Terminal className="size-3 text-slate-500" />
+                          <span>日志</span>
+                        </Button>
+                      </div>
                     )}
                     <Button
                       variant="ghost"
@@ -362,6 +452,24 @@ export function HistoryView() {
         onClose={() => setIsPreviewOpen(false)}
         images={previewImages}
         initialIndex={previewIndex}
+      />
+
+      {/* Subtitle Proofreader Modal */}
+      <SubtitleProofreaderModal
+        isOpen={proofreadingJob !== null}
+        onClose={() => setProofreadingJob(null)}
+        job={proofreadingJob}
+        onJobUpdated={(updated) => {
+          setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)))
+        }}
+      />
+
+      {/* Real-time Job Execution Logs Modal */}
+      <JobLogsModal
+        open={logJob !== null}
+        onOpenChange={(open) => !open && setLogJob(null)}
+        jobId={logJob?.id ?? null}
+        jobTitle={logJob?.title}
       />
     </div>
   )

@@ -13,6 +13,7 @@ from app.services.sell_planner import (
     NarrativeBlock,
     PRICE_RE,
     block_key,
+    deduplicate_consecutive_clips,
     extract_narrative_blocks,
     splice_opening,
 )
@@ -250,15 +251,7 @@ selected_block_ids 必须来自候选段落编号，按播放顺序排列；afte
                     break
             t += max(0.2, clip.end - clip.start)
 
-    spliced = splice_opening(final_clips, preferred_opening)
-    if preferred_opening and spliced and final_clips:
-        old_first = (final_clips[0].path, round(final_clips[0].start, 2), round(final_clips[0].end, 2))
-        new_first = (spliced[0].path, round(spliced[0].start, 2), round(spliced[0].end, 2))
-        if old_first != new_first:
-            shift = preferred_opening.duration
-            for h in hooks:
-                h.at += shift
-    return spliced, hooks[:4]
+    return deduplicate_consecutive_clips(spliced), hooks[:4]
 
 
 def collect_ai_candidates(
@@ -269,3 +262,193 @@ def collect_ai_candidates(
     """从转写结果抽出供 AI 挑选的连贯话术叙事段落。"""
     rules = rules or ExtractRules()
     return extract_narrative_blocks(clips, rules=rules)
+
+
+def ai_judge_material_coverage_plan(
+    transcribed: list[tuple[Path, list]],
+    *,
+    target_seconds: float,
+    rules: ExtractRules | None = None,
+    variant: int = 0,
+) -> tuple[list[EditClip], list[MagicCue]] | None:
+    """
+    针对用户选中的 N 个素材，使用 AI 大模型（DeepSeek）进行素材深度分析与全覆盖编排：
+    1. 分别提取每个素材内部的连贯叙事段落（NarrativeBlock）。
+    2. 将每个素材的口播内容整理并送入大模型，分析各个素材的卖点定位（Hook痛点/面料细节/版型展示/特价逼单）。
+    3. 强制 AI 为每一个选定的素材挑选 1 段最精华连贯段落，并规划最佳叙事顺序，确保 100% 覆盖全部素材。
+    4. 生成契合目标时长的成片方案和神奇大字。
+    """
+    if not transcribed or not has_openai_key():
+        return None
+
+    rules = rules or ExtractRules()
+    num_materials = len(transcribed)
+    if num_materials <= 1:
+        candidates = collect_ai_candidates(transcribed, rules=rules)
+        return ai_judge_sell_plan(candidates, target_seconds=target_seconds, variant=variant)
+
+    from app.services.sell_planner import is_negative_segment
+
+    # 1. 提取每个素材的连贯段落
+    material_blocks_map: dict[int, list[NarrativeBlock]] = {}
+    for idx, (path, segs) in enumerate(transcribed):
+        m_blocks = extract_narrative_blocks([(path, segs)], rules=rules)
+        if not m_blocks:
+            valid_segs = [s for s in segs if s.text.strip() and not is_negative_segment(s.text, rules)]
+            if valid_segs:
+                m_blocks = [
+                    NarrativeBlock(
+                        path=path,
+                        start=valid_segs[0].start,
+                        end=valid_segs[-1].end,
+                        text="".join(s.text.strip() for s in valid_segs),
+                        clips=[EditClip(path, s.start, s.end, s.text.strip(), "intro") for s in valid_segs],
+                        role="intro",
+                        total_score=1.0,
+                        source_index=idx,
+                    )
+                ]
+            else:
+                from app.services.ffmpeg_pipeline import probe_cached
+                try:
+                    p_info = probe_cached(path)
+                    v_dur = p_info.duration
+                except Exception:
+                    v_dur = 5.0
+                clip_dur = min(12.0, max(1.0, v_dur))
+                m_blocks = [
+                    NarrativeBlock(
+                        path=path,
+                        start=0.0,
+                        end=clip_dur,
+                        text="",
+                        clips=[EditClip(path, 0.0, clip_dur, "", "filler")],
+                        role="filler",
+                        total_score=0.5,
+                        source_index=idx,
+                    )
+                ]
+        material_blocks_map[idx] = m_blocks
+
+    # 2. 构造 AI 提示词
+    mat_prompts = []
+    budget_per_mat = target_seconds / num_materials
+
+    for idx in range(num_materials):
+        blocks = material_blocks_map[idx]
+        p_name = transcribed[idx][0].name
+        block_lines = []
+        for b_i, b in enumerate(blocks[:4]):
+            r_label = "开场种草" if b.role == "intro" else ("破价逼单" if b.role == "price" else "细节讲解")
+            block_lines.append(f"  - 段落 {b_i} [{r_label} / 时长 {b.duration:.1f}s]: \"{b.text.strip()[:60]}\"")
+        mat_prompts.append(f"【素材 #{idx+1} ({p_name})】:\n" + "\n".join(block_lines))
+
+    system = (
+        "你是抖音/快手短视频带货领域的顶级剪辑导演。"
+        "用户选定了指定的一组素材视频，希望拼接成一条高转化率、叙事流畅的带货短视频。"
+        "【核心铁律 1】：每个素材（素材 #1 到 素材 #N）都必须在成片中出现（每个素材挑选 1 个最能体现其价值的连贯段落），绝不能漏掉任何一个素材！"
+        "【核心铁律 2 - 严禁重复复读】：成片中绝对禁止同一句话说两遍或连续出现意思高度重合的车轱辘话（如连续说两次'去店部里看好'）。每一句话必须表达新信息。"
+        "请分析各素材内容，排定最佳出场顺序并挑选各素材的最佳段落。只输出 JSON。"
+    )
+
+    user = f"""目标成片总时长：约 {target_seconds:.0f} 秒（共 {num_materials} 个素材，每个素材平均分配约 {budget_per_mat:.1f} 秒）。
+差异化版本号 variant={variant}。
+
+待拼接的全部素材及其候选段落：
+{chr(10).join(mat_prompts)}
+
+编排要求：
+1. 必须覆盖全部 {num_materials} 个素材，每个素材选出 1 个最佳段落（保证每句话语意完整，不掐头去尾，且绝无重复口播）。
+2. 请按最佳带货叙事逻辑对这 {num_materials} 个素材进行排序（如：Hook痛点素材 ➔ 核心卖点细节素材 ➔ 试穿/展示素材 ➔ 破价福利素材）。
+3. 给出 2～3 条契合当前画面的「神奇大字」爆款屏幕提示（每条 <= 8字）。
+
+严格输出 JSON 格式：
+{{
+  "ordered_materials": [
+    {{"material_index": 0, "block_index": 0, "role": "intro", "reason": "开场钩子"}},
+    {{"material_index": 1, "block_index": 0, "role": "detail", "reason": "面料做工"}}
+  ],
+  "hooks": [
+    {{"text": "主推爆款", "at_material_index": 0}},
+    {{"text": "破价秒杀", "at_material_index": 1}}
+  ]
+}}
+"""
+
+    try:
+        raw = chat_completions(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.55 + 0.1 * (variant % 3),
+        )
+        data = _parse_json(raw)
+    except Exception:
+        return None
+
+    ordered = data.get("ordered_materials") or data.get("materials") or []
+    if not isinstance(ordered, list) or not ordered:
+        return None
+
+    # 解析 AI 决策并验证全素材覆盖
+    chosen_blocks: list[NarrativeBlock] = []
+    included_materials: set[int] = set()
+
+    for item in ordered:
+        if not isinstance(item, dict):
+            continue
+        try:
+            m_idx = int(item.get("material_index", item.get("material_id", -1)))
+            b_idx = int(item.get("block_index", item.get("block_id", 0)))
+        except (TypeError, ValueError):
+            continue
+
+        if m_idx in material_blocks_map and m_idx not in included_materials:
+            blocks = material_blocks_map[m_idx]
+            selected_b = blocks[b_idx] if 0 <= b_idx < len(blocks) else blocks[0]
+            chosen_blocks.append(selected_b)
+            included_materials.add(m_idx)
+
+    # 兜底：如果 AI 遗漏了某些素材，自动把遗漏的素材按顺序补齐！
+    for m_idx in range(num_materials):
+        if m_idx not in included_materials:
+            chosen_blocks.append(material_blocks_map[m_idx][0])
+            included_materials.add(m_idx)
+
+    if not chosen_blocks:
+        return None
+
+    # 展平为 EditClip 列表
+    final_clips: list[EditClip] = []
+    timeline_at = 0.0
+    mat_start_times: dict[int, float] = {}
+
+    for b in chosen_blocks:
+        mat_start_times[b.source_index] = timeline_at
+        final_clips.extend(b.clips)
+        timeline_at += b.duration
+
+    # 构建神奇大字
+    hooks: list[MagicCue] = []
+    raw_hooks = data.get("hooks") or []
+    if isinstance(raw_hooks, list):
+        for h in raw_hooks:
+            if not isinstance(h, dict):
+                continue
+            text = str(h.get("text") or "").strip()
+            text = re.sub(r"\s+", "", text)[:8]
+            if not text:
+                continue
+            at_m = h.get("at_material_index", 0)
+            try:
+                at_m_idx = int(at_m)
+                at_time = mat_start_times.get(at_m_idx, 0.3) + 0.2
+            except (TypeError, ValueError):
+                at_time = 0.3 + len(hooks) * 10.0
+            hooks.append(MagicCue(text=text, at=at_time, duration=1.8))
+
+    if not hooks and final_clips:
+        hooks.append(MagicCue(text="主推爆款", at=0.3, duration=2.0))
+
+    return deduplicate_consecutive_clips(final_clips), hooks[:4]

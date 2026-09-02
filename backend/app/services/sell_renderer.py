@@ -106,6 +106,70 @@ def split_subtitle_chunks(text: str, *, max_chars: int = 10) -> list[str]:
     return chunks
 
 
+def expand_to_subtitle_chunks(
+    subtitles: list[Any],
+    speech_speed: float = 1.0,
+    max_chars: int = 10,
+) -> list[SubtitleItem]:
+    """
+    将成片字幕展开为与屏幕 ASS 渲染完全一致的短句切片（每段 <= max_chars 字）。
+    确保前端校对列表中每一行与视频画面中弹出的每一句字幕 1:1 精确对其，方便逐句人工微调。
+    """
+    speed = max(0.5, min(2.0, speech_speed))
+    expanded: list[SubtitleItem] = []
+
+    for item in subtitles:
+        if isinstance(item, SubtitleItem):
+            st = float(item.start)
+            et = float(item.end)
+            text = str(item.text).strip()
+        elif isinstance(item, dict):
+            st = float(item.get("start", 0.0))
+            et = float(item.get("end", st + 1.0))
+            text = str(item.get("text", "")).strip()
+        elif hasattr(item, "start") and hasattr(item, "end") and hasattr(item, "text"):
+            st = float(getattr(item, "start"))
+            et = float(getattr(item, "end"))
+            text = str(getattr(item, "text")).strip()
+        else:
+            continue
+
+        if not text:
+            continue
+
+        dur = max(0.2, et - st)
+        chunks = split_subtitle_chunks(text, max_chars=max_chars)
+        if not chunks:
+            continue
+
+        if len(chunks) == 1:
+            expanded.append(SubtitleItem(text=chunks[0], start=round(st, 3), end=round(et, 3)))
+            continue
+
+        weights = [max(1, len(c)) for c in chunks]
+        weight_sum = float(sum(weights))
+        t = st
+        for i, (chunk, w) in enumerate(zip(chunks, weights)):
+            share = dur * (w / weight_sum)
+            if i == len(chunks) - 1:
+                end = et
+            else:
+                end = min(et, t + max(0.28 / speed, share))
+            if end <= t:
+                end = min(et, t + 0.28 / speed)
+
+            expanded.append(
+                SubtitleItem(
+                    text=chunk,
+                    start=round(t, 3),
+                    end=round(end, 3),
+                )
+            )
+            t = end
+
+    return expanded
+
+
 def _ts(seconds: float) -> str:
     cs = int(round(max(0.0, seconds) * 100))
     h = cs // 360000
@@ -371,9 +435,16 @@ def render_sell_video(
     n = len(video_slices)
 
     for i, slice_item in enumerate(video_slices):
-        on_progress(35 + int(40 * i / max(n, 1)), f"按连贯段落截取片段 {i + 1}/{n}…")
         seg_file = work / f"seg_{i:03d}.mp4"
         raw_dur = slice_item.raw_dur
+
+        # 🚀 断点继续：若该切片已经成功生成且完整，则直接复用，跳过耗时 FFmpeg 编码
+        if seg_file.exists() and seg_file.stat().st_size > 2048:
+            segment_files.append(seg_file)
+            on_progress(35 + int(40 * i / max(n, 1)), f"断点复用已截取片段 {i + 1}/{n}…")
+            continue
+
+        on_progress(35 + int(40 * i / max(n, 1)), f"按连贯段落截取片段 {i + 1}/{n}…")
         info = probe_cached(slice_item.path)
         seg_dur = max(0.2, raw_dur / speech_speed)
 
@@ -441,29 +512,73 @@ def render_sell_video(
         run_cmd(cmd, timeout=300)
         segment_files.append(seg_file)
 
-    on_progress(76, "拼接 9:16 成片…")
-    concat_list = work / "concat.txt"
-    concat_list.write_text(
-        "".join(f"file '{p.resolve()}'\n" for p in segment_files),
-        encoding="utf-8",
-    )
     concat_path = work / "concat.mp4"
-    run_cmd(
-        [
-            settings.ffmpeg_bin,
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(concat_list),
-            "-c",
-            "copy",
-            str(concat_path),
-        ],
-        timeout=300,
-    )
+    if not (concat_path.exists() and concat_path.stat().st_size > 10240):
+        on_progress(76, "拼接 9:16 成片…")
+        concat_list = work / "concat.txt"
+        concat_list.write_text(
+            "".join(f"file '{p.resolve()}'\n" for p in segment_files),
+            encoding="utf-8",
+        )
+        run_cmd(
+            [
+                settings.ffmpeg_bin,
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_list),
+                "-c",
+                "copy",
+                str(concat_path),
+            ],
+            timeout=300,
+        )
+    else:
+        on_progress(76, "断点复用已拼接视频…")
+
+    # 保存未烧录字幕的纯净原片底片，便于后续随时人工校验字幕并无损重烧
+    clean_out = settings.outputs_dir / f"{output.stem}_clean.mp4"
+    try:
+        shutil.copyfile(concat_path, clean_out)
+    except Exception:
+        pass
+
+    # 保存成片对齐的逐句短字幕 JSON 与渲染元数据
+    import json
+    expanded_subs = expand_to_subtitle_chunks(subtitle_items, speech_speed=speech_speed, max_chars=10)
+    subs_data = [
+        {
+            "id": f"sub_{idx}",
+            "start": round(item.start, 3),
+            "end": round(item.end, 3),
+            "text": item.text,
+        }
+        for idx, item in enumerate(expanded_subs)
+    ]
+    try:
+        (settings.outputs_dir / f"{output.stem}_subtitles.json").write_text(
+            json.dumps(subs_data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        meta_data = {
+            "speech_speed": speech_speed,
+            "subtitle_position": subtitle_position,
+            "video_quality": vq,
+            "add_bgm": add_bgm,
+            "bgm_file": bgm_file,
+            "bgm_volume": bgm_volume,
+            "magic_cues": [
+                {"text": cue.text, "at": cue.at, "duration": cue.duration}
+                for cue in (magic_cues or [])
+            ],
+        }
+        (settings.outputs_dir / f"{output.stem}_meta.json").write_text(
+            json.dumps(meta_data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
 
     current = concat_path
 
@@ -556,3 +671,185 @@ def render_sell_video(
         shutil.copyfile(current, output)
     on_progress(100, "成片完成")
     return probe(output).duration
+
+
+def format_srt_time(seconds: float) -> str:
+    ms = int(round(max(0.0, seconds) * 1000))
+    h = ms // 3600000
+    ms %= 3600000
+    m = ms // 60000
+    ms %= 60000
+    s = ms // 1000
+    milli = ms % 1000
+    return f"{h:02d}:{m:02d}:{s:02d},{milli:03d}"
+
+
+def generate_srt_content(subtitles: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for idx, item in enumerate(subtitles, start=1):
+        st = format_srt_time(float(item.get("start", 0.0)))
+        et = format_srt_time(float(item.get("end", 0.0)))
+        txt = str(item.get("text", "")).strip()
+        lines.append(f"{idx}\n{st} --> {et}\n{txt}\n")
+    return "\n".join(lines)
+
+
+def reburn_job_subtitles(
+    job_id: str,
+    new_subtitles: list[dict[str, Any]],
+    subtitle_position: str = "high",
+) -> tuple[float, list[dict[str, Any]]]:
+    """
+    根据人工校验修正后的字幕段落，重新烧录 ASS 字幕并替换成片。
+    """
+    import json
+    import time
+    clean_path = settings.outputs_dir / f"{job_id}_clean.mp4"
+    final_output = settings.outputs_dir / f"{job_id}.mp4"
+    meta_path = settings.outputs_dir / f"{job_id}_meta.json"
+
+    clean_has_bgm = False
+    if not clean_path.exists():
+        if final_output.exists():
+            clean_path = final_output
+            clean_has_bgm = True
+        else:
+            raise FileNotFoundError(f"成片底片文件不存在: {job_id}")
+
+    meta: dict[str, Any] = {}
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    speech_speed = float(meta.get("speech_speed", 1.0))
+    vq = str(meta.get("video_quality", "1080p")).lower()
+    add_bgm = bool(meta.get("add_bgm", False))
+    bgm_file = meta.get("bgm_file")
+    bgm_volume = int(meta.get("bgm_volume", 25))
+    raw_cues = meta.get("magic_cues", [])
+    magic_cues = [
+        MagicCue(text=c["text"], at=float(c["at"]), duration=float(c["duration"]))
+        for c in raw_cues
+        if "text" in c and "at" in c and "duration" in c
+    ]
+
+    if vq == "4k":
+        crf_val, preset_val = "17", "fast"
+    elif vq == "2k":
+        crf_val, preset_val = "19", "veryfast"
+    elif vq == "720p":
+        crf_val, preset_val = "26", "veryfast"
+    else:
+        crf_val, preset_val = "22", "veryfast"
+
+    work = settings.work_dir / f"reburn_{job_id}_{int(time.time() * 1000)}"
+    work.mkdir(parents=True, exist_ok=True)
+
+    try:
+        sub_items: list[SubtitleItem] = []
+        updated_subs: list[dict[str, Any]] = []
+        for idx, seg in enumerate(new_subtitles):
+            text = str(seg.get("text", "")).strip()
+            if not text:
+                continue
+            st = float(seg.get("start", 0.0))
+            et = float(seg.get("end", st + 1.0))
+            sub_items.append(SubtitleItem(text=text, start=st, end=et))
+            updated_subs.append({
+                "id": seg.get("id") or f"sub_{idx}",
+                "start": round(st, 3),
+                "end": round(et, 3),
+                "text": text,
+            })
+
+        ass_file = work / "subs.ass"
+        write_ass_subtitles(
+            sub_items,
+            ass_file,
+            magic_cues=magic_cues,
+            speech_speed=speech_speed,
+            subtitle_position=subtitle_position,
+        )
+
+        subtitled = work / "subtitled.mp4"
+        run_cmd(
+            [
+                settings.ffmpeg_bin,
+                "-y",
+                "-i",
+                str(clean_path),
+                "-vf",
+                f"subtitles={ass_file.name}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                preset_val,
+                "-crf",
+                crf_val,
+                "-c:a",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(subtitled),
+            ],
+            timeout=300,
+            cwd=work,
+        )
+
+        current = subtitled
+
+        if add_bgm and not clean_has_bgm:
+            bgm_path = find_available_bgm(bgm_file)
+            if bgm_path:
+                volume_val = max(0.0, min(1.0, bgm_volume / 100.0))
+                mixed = work / "mixed.mp4"
+                run_cmd(
+                    [
+                        settings.ffmpeg_bin,
+                        "-y",
+                        "-i",
+                        str(current),
+                        "-stream_loop",
+                        "-1",
+                        "-i",
+                        str(bgm_path),
+                        "-filter_complex",
+                        f"[0:a]volume=1.0[vocal];"
+                        f"[1:a]volume={volume_val:.2f},afade=t=in:st=0:d=1[bg];"
+                        "[vocal][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]",
+                        "-map",
+                        "0:v",
+                        "-map",
+                        "[aout]",
+                        "-c:v",
+                        "copy",
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        "192k",
+                        "-shortest",
+                        "-movflags",
+                        "+faststart",
+                        str(mixed),
+                    ],
+                    timeout=300,
+                )
+                current = mixed
+
+        shutil.copyfile(current, final_output)
+        (settings.outputs_dir / f"{job_id}_subtitles.json").write_text(
+            json.dumps(updated_subs, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        meta["subtitle_position"] = subtitle_position
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        dur = probe(final_output).duration
+        return dur, updated_subs
+    finally:
+        if work.exists():
+            try:
+                shutil.rmtree(work)
+            except Exception:
+                pass

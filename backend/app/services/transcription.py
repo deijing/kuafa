@@ -155,12 +155,164 @@ def merge_to_sentences(
     return sentences
 
 
+WHISPER_MODELS_CATALOG = [
+    {
+        "name": "tiny",
+        "label": "Tiny (极速/39M)",
+        "size_label": "~75 MB",
+        "description": "内存占用极小，适合低配电脑，识别准确率一般",
+        "recommended": False,
+    },
+    {
+        "name": "base",
+        "label": "Base (标准/74M)",
+        "size_label": "~145 MB",
+        "description": "运行极快，适合日常普通话快速离线测试",
+        "recommended": False,
+    },
+    {
+        "name": "small",
+        "label": "Small (进阶/244M)",
+        "size_label": "~480 MB",
+        "description": "词汇量大幅提升，中文带货识别准确率显著提高",
+        "recommended": True,
+    },
+    {
+        "name": "medium",
+        "label": "Medium (高精/769M)",
+        "size_label": "~1.5 GB",
+        "description": "高保真语义识别，复杂口播与同音字识别极准",
+        "recommended": False,
+    },
+    {
+        "name": "large-v3",
+        "label": "Large-v3 (旗舰/1550M)",
+        "size_label": "~3.1 GB",
+        "description": "Whisper 顶配旗舰模型，顶级中文与中英混说精度",
+        "recommended": False,
+    },
+]
+
 _LOCAL_WHISPER_MODELS: dict[str, Any] = {}
 _MODEL_LOCK = threading.Lock()
+_DOWNLOAD_LOCK = threading.Lock()
+_DOWNLOADING_MODELS: dict[str, dict[str, Any]] = {}
+
+
+def check_whisper_model_status(size: str) -> dict[str, Any]:
+    """检测指定 Whisper 模型在本地是否已下载就绪。"""
+    clean_size = (size or "base").strip().lower()
+    meta = next((m for m in WHISPER_MODELS_CATALOG if m["name"] == clean_size), None)
+    if not meta:
+        meta = {
+            "name": clean_size,
+            "label": clean_size,
+            "size_label": "未知",
+            "description": "",
+            "recommended": False,
+        }
+
+    candidates = [
+        settings.models_dir / f"models--Systran--faster-whisper-{clean_size}",
+        Path.home() / f".cache/huggingface/hub/models--Systran--faster-whisper-{clean_size}",
+    ]
+    is_downloaded = False
+    model_path = None
+    for c in candidates:
+        if c.exists() and any(f.name.startswith("model.") for f in c.rglob("*")):
+            is_downloaded = True
+            model_path = str(c)
+            break
+
+    download_task = _DOWNLOADING_MODELS.get(clean_size)
+    is_downloading = bool(download_task and download_task.get("status") == "downloading")
+
+    return {
+        "name": clean_size,
+        "label": meta["label"],
+        "size_label": meta["size_label"],
+        "description": meta["description"],
+        "recommended": meta.get("recommended", False),
+        "is_downloaded": is_downloaded,
+        "model_path": model_path,
+        "is_downloading": is_downloading,
+        "download_status": download_task.get("status") if download_task else ("completed" if is_downloaded else "idle"),
+        "download_message": download_task.get("message") if download_task else ("已下载" if is_downloaded else "未下载"),
+        "download_error": download_task.get("error") if download_task else None,
+    }
+
+
+def list_whisper_models() -> list[dict[str, Any]]:
+    """列出全部可用本地 Whisper 模型及其本地下载状态。"""
+    return [check_whisper_model_status(m["name"]) for m in WHISPER_MODELS_CATALOG]
+
+
+def start_download_whisper_model(model_size: str) -> dict[str, Any]:
+    """触发后台下载指定 Whisper 模型权重文件。"""
+    clean_size = (model_size or "small").strip().lower()
+    if clean_size not in ("tiny", "base", "small", "medium", "large-v3"):
+        clean_size = "small"
+
+    with _DOWNLOAD_LOCK:
+        current = _DOWNLOADING_MODELS.get(clean_size)
+        if current and current.get("status") == "downloading":
+            return current
+
+        # 检查是否已下载
+        st = check_whisper_model_status(clean_size)
+        if st["is_downloaded"]:
+            res = {
+                "model": clean_size,
+                "status": "completed",
+                "progress": 100,
+                "message": f"模型 {clean_size} 已就绪",
+                "error": None,
+            }
+            _DOWNLOADING_MODELS[clean_size] = res
+            return res
+
+        task = {
+            "model": clean_size,
+            "status": "downloading",
+            "progress": 10,
+            "message": f"正在下载 {clean_size} 模型权重文件…",
+            "error": None,
+        }
+        _DOWNLOADING_MODELS[clean_size] = task
+
+    def _worker():
+        try:
+            logger.info("开始下载 Whisper 模型 [%s] 至 %s ...", clean_size, settings.models_dir)
+            from faster_whisper import download_model
+            settings.models_dir.mkdir(parents=True, exist_ok=True)
+            download_model(clean_size, output_dir=str(settings.models_dir))
+            
+            with _DOWNLOAD_LOCK:
+                _DOWNLOADING_MODELS[clean_size] = {
+                    "model": clean_size,
+                    "status": "completed",
+                    "progress": 100,
+                    "message": f"模型 {clean_size} 下载完成！",
+                    "error": None,
+                }
+            logger.info("Whisper 模型 [%s] 下载成功", clean_size)
+        except Exception as exc:
+            logger.exception("下载 Whisper 模型 [%s] 失败: %s", clean_size, exc)
+            with _DOWNLOAD_LOCK:
+                _DOWNLOADING_MODELS[clean_size] = {
+                    "model": clean_size,
+                    "status": "failed",
+                    "progress": 0,
+                    "message": f"下载失败: {exc}",
+                    "error": str(exc),
+                }
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return task
 
 
 def get_local_whisper_model(model_size: str = "base") -> Any:
-    """获取本地 Whisper 实例（内存缓存，线程安全）。"""
+    """获取本地 Whisper 实例（内存缓存，线程安全；若未下载则自动下载）。"""
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
@@ -300,6 +452,31 @@ def transcribe_material(video: Path) -> list[TranscriptSegment]:
     return transcribe_video(video)
 
 
+def has_transcription_cache(
+    video: Path,
+    *,
+    engine: str | None = None,
+    model_size: str | None = None,
+) -> bool:
+    """检查指定视频是否已存在有效的 ASR 缓存。"""
+    try:
+        engine = engine or get_secret("transcription_engine", settings.transcription_engine or "bcut")
+        model_size = model_size or get_secret("local_whisper_model", settings.local_whisper_model or "base")
+        cache_dir = settings.data_dir / "transcripts"
+        cache_suffix = f"{engine}.{model_size}" if engine == "local" else engine
+        cache_json = cache_dir / f"{video.stem}.{cache_suffix}.json"
+        if cache_json.exists():
+            raw = json.loads(cache_json.read_text(encoding="utf-8"))
+            return (
+                isinstance(raw, dict)
+                and raw.get("mtime_ns") == video.stat().st_mtime_ns
+                and bool(raw.get("segments"))
+            )
+    except Exception:
+        pass
+    return False
+
+
 def transcribe_video(
     video: Path,
     *,
@@ -310,11 +487,11 @@ def transcribe_video(
     """
     转写视频口播。
     支持两种模式：
+    - bcut: 云端必剪 ASR（极速高精度、中英文/电商短视频优化，推荐）
     - local: 本地 Whisper 离线模型转写（免联网，隐私安全）
-    - bcut: 云端必剪 ASR（极速、免下载）
     若未指定 engine 则读取全局设置 (get_secret('transcription_engine'))。
     """
-    engine = engine or get_secret("transcription_engine", settings.transcription_engine or "local")
+    engine = engine or get_secret("transcription_engine", settings.transcription_engine or "bcut")
     model_size = model_size or get_secret("local_whisper_model", settings.local_whisper_model or "base")
 
     cache_dir = cache_dir or (settings.data_dir / "transcripts")

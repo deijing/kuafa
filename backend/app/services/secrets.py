@@ -17,6 +17,7 @@ SECRET_KEYS = (
     "openai_reasoning_effort",
     "transcription_engine",
     "local_whisper_model",
+    "burn_subtitles_default",
 )
 
 
@@ -105,11 +106,12 @@ def secrets_status() -> dict[str, Any]:
             )
         ),
         "transcription_engine": get_secret(
-            "transcription_engine", settings.transcription_engine or "local"
+            "transcription_engine", settings.transcription_engine or "bcut"
         ),
         "local_whisper_model": get_secret(
             "local_whisper_model", settings.local_whisper_model or "base"
         ),
+        "burn_subtitles_default": get_secret("burn_subtitles_default", "true").lower() in ("true", "1", "yes"),
     }
 
 

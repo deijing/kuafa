@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  FileText,
   Sparkles,
   ZoomIn,
   Loader2,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { SubtitleProofreaderModal } from "@/components/ui/subtitle-proofreader-modal"
 import type { Job, CoverResult } from "@/lib/api"
 import { cn, formatProcessingDuration } from "@/lib/utils"
 
@@ -27,6 +29,7 @@ export type VideoPreviewModalProps = {
   isGeneratingCovers?: boolean
   generatingJobId?: string | null
   onOpenImagePreview?: (images: string[], index?: number) => void
+  onJobUpdated?: (updatedJob: Job) => void
 }
 
 export function VideoPreviewModal({
@@ -39,6 +42,7 @@ export function VideoPreviewModal({
   isGeneratingCovers = false,
   generatingJobId = null,
   onOpenImagePreview,
+  onJobUpdated,
 }: VideoPreviewModalProps) {
   // Filter jobs that are succeeded and have output_url
   const playableJobs = useMemo(
@@ -47,10 +51,14 @@ export function VideoPreviewModal({
   )
 
   const [currentJobId, setCurrentJobId] = useState<string | null>(initialJobId || null)
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen)
   const [copied, setCopied] = useState(false)
+  const [isProofreaderOpen, setIsProofreaderOpen] = useState(false)
 
-  // Sync currentJobId when modal opens or initialJobId changes
-  useEffect(() => {
+  // 仅在弹窗打开瞬间（关闭 -> 打开）同步初始选中的 initialJobId
+  // 避免后台定时轮询刷新 jobs 时强制重置用户当前正在观看的视频（如视频2、视频3）
+  if (isOpen !== prevIsOpen) {
+    setPrevIsOpen(isOpen)
     if (isOpen) {
       if (initialJobId && playableJobs.some((j) => j.id === initialJobId)) {
         setCurrentJobId(initialJobId)
@@ -58,12 +66,20 @@ export function VideoPreviewModal({
         setCurrentJobId(playableJobs[0].id)
       }
     }
-  }, [isOpen, initialJobId, playableJobs])
+  }
+
+  // 计算当前有效选中的视频 ID
+  const activeJobId = useMemo(() => {
+    if (currentJobId && playableJobs.some((j) => j.id === currentJobId)) {
+      return currentJobId
+    }
+    return playableJobs[0]?.id ?? null
+  }, [playableJobs, currentJobId])
 
   const currentIndex = useMemo(() => {
-    const idx = playableJobs.findIndex((j) => j.id === currentJobId)
+    const idx = playableJobs.findIndex((j) => j.id === activeJobId)
     return idx >= 0 ? idx : 0
-  }, [playableJobs, currentJobId])
+  }, [playableJobs, activeJobId])
 
   const currentJob = playableJobs[currentIndex] || null
 
@@ -171,6 +187,17 @@ export function VideoPreviewModal({
         </div>
 
         <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setIsProofreaderOpen(true)}
+            className="bg-white/10 hover:bg-white/20 text-white border-white/20 rounded-xl text-xs gap-1.5 h-9 font-semibold cursor-pointer"
+          >
+            <FileText className="size-4 text-blue-400" />
+            字幕人工校验
+          </Button>
+
           <Button
             type="button"
             variant="ghost"
@@ -389,6 +416,14 @@ export function VideoPreviewModal({
           </div>
         </div>
       )}
+
+      {/* Subtitle Proofreader Modal */}
+      <SubtitleProofreaderModal
+        isOpen={isProofreaderOpen}
+        onClose={() => setIsProofreaderOpen(false)}
+        job={currentJob}
+        onJobUpdated={onJobUpdated}
+      />
     </div>
   )
 }

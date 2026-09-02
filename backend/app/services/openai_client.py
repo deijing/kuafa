@@ -142,7 +142,7 @@ def chat_completions(
             temperature=temperature,
             reasoning_effort=effort,
         ),
-        timeout=180,
+        timeout=45,
     )
     if resp.status_code >= 400:
         raise OpenAICompatError(f"调用失败 ({resp.status_code}): {resp.text[:300]}")

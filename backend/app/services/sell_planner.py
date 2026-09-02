@@ -239,6 +239,79 @@ def _is_sparse_or_stalled(seg: TranscriptSegment) -> bool:
     return False
 
 
+def text_similarity(t1: str, t2: str) -> float:
+    """计算两段中文口播文本的字符级覆盖重合度（去标点与空格）。"""
+    clean1 = set(re.findall(r"[\u4e00-\u9fa5a-zA-Z0-9]", t1))
+    clean2 = set(re.findall(r"[\u4e00-\u9fa5a-zA-Z0-9]", t2))
+    if not clean1 or not clean2:
+        return 0.0
+    intersection = clean1.intersection(clean2)
+    smaller = min(len(clean1), len(clean2))
+    return len(intersection) / smaller if smaller > 0 else 0.0
+
+
+def has_long_common_substring(t1: str, t2: str, min_len: int = 6) -> bool:
+    """检查两段文本是否包含 >= min_len 个连续字符的重复短语（如 '去店部里面要看好'）。"""
+    c1 = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", t1)
+    c2 = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", t2)
+    if len(c1) < min_len or len(c2) < min_len:
+        return False
+    for i in range(len(c1) - min_len + 1):
+        sub = c1[i : i + min_len]
+        if sub in c2:
+            return True
+    return False
+
+
+def is_repetitive_sentence(t1: str, t2: str) -> bool:
+    """判断 t2 是否是 t1 的重复/复读机/换汤不换药的口播表达。"""
+    s1, s2 = t1.strip(), t2.strip()
+    if not s1 or not s2:
+        return False
+    if s1 == s2:
+        return True
+    if text_similarity(s1, s2) >= 0.58:
+        return True
+    if has_long_common_substring(s1, s2, min_len=6):
+        return True
+    return False
+
+
+def deduplicate_consecutive_clips(clips: list[EditClip]) -> list[EditClip]:
+    """
+    智能过滤成片中相邻或近邻的重复口播、复读机车轱辘话和无意义孤立短词（如'好吧'）。
+    """
+    if not clips:
+        return []
+    result: list[EditClip] = []
+    seen_texts: list[str] = []
+
+    for clip in clips:
+        text = clip.text.strip()
+        dur = max(0.1, clip.end - clip.start)
+
+        # 过滤孤立且过短的纯语气词碎片（如 '好吧'、'嗯'、'哈'、'行吧'）
+        if len(text) <= 2 and dur < 0.6 and text in ("好吧", "行吧", "对吧", "嗯", "哈", "啊", "呢", "行", "对"):
+            continue
+
+        if not text:
+            result.append(clip)
+            continue
+
+        # 检查是否与前 3 句已入选的内容高度重复（消除复读机）
+        is_dup = False
+        for prev in seen_texts[-3:]:
+            if is_repetitive_sentence(prev, text):
+                is_dup = True
+                break
+
+        if not is_dup:
+            result.append(clip)
+            seen_texts.append(text)
+
+    return result
+
+
 def extract_narrative_blocks(
     clips: list[tuple[Path, list[TranscriptSegment]]],
     *,
@@ -249,6 +322,7 @@ def extract_narrative_blocks(
     """
     将 ASR 识别出的单句按【时间连续性】与【话题完整性】聚类为高连贯的「话术叙事段落」。
     保证段落内部一气呵成，完整表达一个核心卖点/引子/价格机制，杜绝断头截尾或把同一句话切两半。
+    同时自动识别主播口癖与连续复读机，强制分流拆段，杜绝段落内重复。
     """
     blocks: list[NarrativeBlock] = []
 
@@ -272,9 +346,35 @@ def extract_narrative_blocks(
             nonlocal curr_segs
             if not curr_segs:
                 return
-            b_start = curr_segs[0].start
-            b_end = curr_segs[-1].end
-            b_text = "".join(s.text.strip() for s in curr_segs)
+
+            # 构造 EditClip 列表，并在此处执行段内去重（过滤紧随的复读句与孤立的语气词'好吧'）
+            cleaned_clips: list[EditClip] = []
+            seen_in_block: list[str] = []
+            for s in curr_segs:
+                stext = s.text.strip()
+                sdur = max(0.1, s.end - s.start)
+                if len(stext) <= 2 and sdur < 0.6 and stext in ("好吧", "行吧", "对吧", "嗯", "哈", "啊", "呢", "行", "对"):
+                    continue
+                if seen_in_block and any(is_repetitive_sentence(prev, stext) for prev in seen_in_block):
+                    continue
+                cleaned_clips.append(
+                    EditClip(
+                        path=path,
+                        start=s.start,
+                        end=s.end,
+                        text=stext,
+                        role="filler",
+                    )
+                )
+                seen_in_block.append(stext)
+
+            if not cleaned_clips:
+                curr_segs = []
+                return
+
+            b_start = cleaned_clips[0].start
+            b_end = cleaned_clips[-1].end
+            b_text = "".join(c.text.strip() for c in cleaned_clips)
             dur = max(0.2, b_end - b_start)
 
             if dur < 1.0 and len(b_text) < 3:
@@ -294,6 +394,9 @@ def extract_narrative_blocks(
             elif detail_cnt > 0:
                 role = "intro" if rules.detail else "filler"
 
+            for c in cleaned_clips:
+                c.role = role
+
             # 综合评分：优先选语速均匀、句意丰富、表达饱满（5~15s）的黄金段落
             score = 0.0
             if role == "price":
@@ -309,20 +412,8 @@ def extract_narrative_blocks(
                 score -= 1.0
 
             # 句数饱满加分（2~5句连贯叙事最佳）
-            if 2 <= len(curr_segs) <= 5:
+            if 2 <= len(cleaned_clips) <= 5:
                 score += 1.5
-
-            # 构造 EditClip 列表（段落内所有单句完全连续）
-            block_clips = [
-                EditClip(
-                    path=path,
-                    start=s.start,
-                    end=s.end,
-                    text=s.text.strip(),
-                    role=role,
-                )
-                for s in curr_segs
-            ]
 
             blocks.append(
                 NarrativeBlock(
@@ -330,7 +421,7 @@ def extract_narrative_blocks(
                     start=b_start,
                     end=b_end,
                     text=b_text,
-                    clips=block_clips,
+                    clips=cleaned_clips,
                     role=role,
                     hook_score=float(hook_cnt),
                     detail_score=float(detail_cnt),
@@ -355,15 +446,19 @@ def extract_narrative_blocks(
             # 1. 停顿超过 1.10 秒（明显转场或较长静音中断）
             # 2. 段落时长达到上限且前句已完整收尾（非悬空连接词）
             # 3. 当前已积攒足够时长(>=7s)且当前句明确进入价格/逼单环节，而前文是介绍环节
+            # 4. 重复句检测：若当前句与当前段落内已有句子高度重复（主播复读机），强制切段分流
             is_role_shift = False
             if acc_dur >= 7.0:
                 if not PRICE_RE.search(prev_text) and PRICE_RE.search(seg.text):
                     is_role_shift = True
 
+            is_repeating = any(is_repetitive_sentence(s.text, seg.text) for s in curr_segs)
             is_dangling = bool(_DANGLING_CONNECTIVES.search(prev_text))
             
             should_flush = False
-            if gap > 1.10 and not is_dangling:
+            if is_repeating:
+                should_flush = True
+            elif gap > 1.10 and not is_dangling:
                 should_flush = True
             elif acc_dur >= max_block_seconds and not is_dangling:
                 should_flush = True
@@ -541,12 +636,12 @@ def build_sell_plan(
         ordered_blocks.append(opening_selected)
     ordered_blocks.extend(intros + others + prices)
 
-    # 4. 展平为连续的 EditClip 列表，段落内部单句完全完整
+    # 4. 展平为连续的 EditClip 列表，并执行连续复读机去重
     result_clips: list[EditClip] = []
     for b in ordered_blocks:
         result_clips.extend(b.clips)
 
-    return result_clips
+    return deduplicate_consecutive_clips(result_clips)
 
 
 def build_magic_cues(clips: list[EditClip], *, variant: int = 0) -> list[MagicCue]:
@@ -608,3 +703,154 @@ def build_magic_cues(clips: list[EditClip], *, variant: int = 0) -> list[MagicCu
         cues.append(MagicCue(text="主推爆款", at=0.3, duration=2.0))
 
     return cues[:4]
+
+
+def build_material_coverage_plan(
+    clips: list[tuple[Path, list[TranscriptSegment]]],
+    *,
+    target_seconds: float = 60.0,
+    rules: ExtractRules | None = None,
+    variant: int = 0,
+    randomize_intro: bool = True,
+    batch_id: str | None = None,
+) -> list[EditClip]:
+    """
+    按素材分切 & 全素材覆盖拼接（保证用户选中的每个素材 100% 出现）：
+    - 针对用户选中的 N 个素材，将总时长均分给这 N 个素材。
+    - 对每个素材独立提取语义完整的话术段落（NarrativeBlock），挑选该素材的最优黄金片段。
+    - 第 1 个素材优先提取开场 Hook/痛点引子；中间素材提取核心卖点/产品特写细节；最后一个素材若有价格福利则提取逼单段落。
+    - 彻底解决只拼接前两个素材、漏掉后面素材的问题！
+    """
+    rules = rules or ExtractRules()
+    if not clips:
+        return []
+
+    num_materials = len(clips)
+    if num_materials == 1:
+        return build_sell_plan(
+            clips,
+            target_seconds=target_seconds,
+            rules=rules,
+            variant=variant,
+            randomize_intro=randomize_intro,
+            batch_id=batch_id,
+        )
+
+    budget_per_mat = max(3.0, target_seconds / num_materials)
+    selected_blocks_per_material: list[list[NarrativeBlock]] = []
+
+    for mat_idx, (path, segs) in enumerate(clips):
+        # 1. 提取当前素材的所有连贯段落
+        mat_blocks = extract_narrative_blocks([(path, segs)], rules=rules)
+
+        if not mat_blocks:
+            # 兜底：如果过滤后无段落，从原有效单句保底
+            valid_segs = [
+                s for s in segs
+                if s.text.strip() and not is_negative_segment(s.text, rules)
+            ]
+            if valid_segs:
+                curr_dur = 0.0
+                picked_segs = []
+                for s in valid_segs:
+                    s_dur = max(0.2, s.end - s.start)
+                    picked_segs.append(s)
+                    curr_dur += s_dur
+                    if curr_dur >= budget_per_mat:
+                        break
+                mat_blocks = [
+                    NarrativeBlock(
+                        path=path,
+                        start=picked_segs[0].start,
+                        end=picked_segs[-1].end,
+                        text="".join(s.text.strip() for s in picked_segs),
+                        clips=[
+                            EditClip(path, s.start, s.end, s.text.strip(), "intro")
+                            for s in picked_segs
+                        ],
+                        role="intro",
+                        total_score=1.0,
+                        source_index=mat_idx,
+                    )
+                ]
+            else:
+                # 若完全无有效转写，从原视频按时长安全抽样
+                from app.services.ffmpeg_pipeline import probe_cached
+                try:
+                    p_info = probe_cached(path)
+                    v_dur = p_info.duration
+                except Exception:
+                    v_dur = 5.0
+                clip_dur = min(budget_per_mat, max(1.0, v_dur))
+                mat_blocks = [
+                    NarrativeBlock(
+                        path=path,
+                        start=0.0,
+                        end=clip_dur,
+                        text="",
+                        clips=[EditClip(path, 0.0, clip_dur, "", "filler")],
+                        role="filler",
+                        total_score=0.5,
+                        source_index=mat_idx,
+                    )
+                ]
+
+        # 2. 根据当前素材在整体拼接中的角色选出最佳段落
+        is_first = (mat_idx == 0)
+        is_last = (mat_idx == num_materials - 1)
+
+        hooks = [b for b in mat_blocks if b.role == "intro"]
+        prices = [b for b in mat_blocks if b.role == "price"]
+        details = [b for b in mat_blocks if b.role == "filler" and b.detail_score > 0]
+        others = [b for b in mat_blocks if b.role == "filler" and b.detail_score == 0]
+
+        hooks.sort(key=lambda b: (b.total_score, b.hook_score), reverse=True)
+        prices.sort(key=lambda b: (b.total_score, b.price_score), reverse=True)
+        details.sort(key=lambda b: b.total_score, reverse=True)
+        others.sort(key=lambda b: b.total_score, reverse=True)
+
+        candidate_list: list[NarrativeBlock] = []
+        if is_first:
+            # 开场素材：优先 Hook
+            candidate_list = hooks + details + others + prices
+        elif is_last and rules.bargain and not rules.filter_price:
+            # 结尾素材：优先 Price/逼单
+            candidate_list = prices + details + hooks + others
+        else:
+            # 中间素材：优先产品细节与卖点
+            candidate_list = details + hooks + others + prices
+
+        if not candidate_list:
+            candidate_list = mat_blocks
+
+        # 差异化轮换选择
+        if variant > 0 and len(candidate_list) > 1:
+            rot = (variant + mat_idx) % len(candidate_list)
+            candidate_list = candidate_list[rot:] + candidate_list[:rot]
+
+        # 挑选契合 budget_per_mat 的段落（至少 1 个，最多填满 budget_per_mat * 1.3）
+        picked_for_this_mat: list[NarrativeBlock] = []
+        accum_time = 0.0
+
+        for b in candidate_list:
+            if not picked_for_this_mat:
+                picked_for_this_mat.append(b)
+                accum_time += b.duration
+            else:
+                if accum_time + b.duration <= budget_per_mat * 1.35:
+                    picked_for_this_mat.append(b)
+                    accum_time += b.duration
+                if accum_time >= budget_per_mat:
+                    break
+
+        # 按原片出现时间排序该素材内的段落，保持语意自然
+        picked_for_this_mat.sort(key=lambda b: b.start)
+        selected_blocks_per_material.append(picked_for_this_mat)
+
+    # 3. 将各素材的选定段落按素材顺序拼接，并执行全局复读机去重
+    final_clips: list[EditClip] = []
+    for mat_blocks_picked in selected_blocks_per_material:
+        for b in mat_blocks_picked:
+            final_clips.extend(b.clips)
+
+    return deduplicate_consecutive_clips(final_clips)

@@ -81,7 +81,7 @@ export type GeneratePayload = {
   bgm_volume?: number
   bgm_file?: string | null
   title?: string
-  mode?: "sell" | "highlight"
+  mode?: "sell" | "highlight" | "material_stitch"
   extract_rules?: Record<string, boolean>
   negative_words?: string[]
   filter_live_pitch?: boolean
@@ -110,7 +110,7 @@ export type BatchGeneratePayload = {
   bgm_volume?: number
   bgm_file?: string | null
   title?: string | null
-  mode?: "sell" | "highlight"
+  mode?: "sell" | "highlight" | "material_stitch"
   extract_rules?: Record<string, boolean>
   negative_words?: string[]
   filter_live_pitch?: boolean
@@ -402,6 +402,7 @@ export type ApiSecrets = {
   openai_reasoning_effort: ReasoningEffort
   transcription_engine: TranscriptionEngine
   local_whisper_model: string
+  burn_subtitles_default?: boolean
 }
 
 export type ReasoningEffort =
@@ -421,6 +422,7 @@ export type UpdateApiSecretsPayload = {
   openai_reasoning_effort?: ReasoningEffort | null
   transcription_engine?: TranscriptionEngine | null
   local_whisper_model?: string | null
+  burn_subtitles_default?: string | boolean | null
 }
 
 export type TranscriptionTestPayload = {
@@ -455,6 +457,58 @@ export function testTranscriptionConnection(payload: TranscriptionTestPayload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
+}
+
+export type WhisperModelInfo = {
+  name: string
+  label: string
+  size_label: string
+  description: string
+  recommended: boolean
+  is_downloaded: boolean
+  model_path: string | null
+  is_downloading: boolean
+  download_status: "idle" | "downloading" | "completed" | "failed"
+  download_message: string
+  download_error: string | null
+}
+
+export function fetchWhisperModels() {
+  return request<WhisperModelInfo[]>("/api/settings/whisper-models")
+}
+
+export function downloadWhisperModel(model: string) {
+  return request<WhisperModelInfo>("/api/settings/whisper-models/download", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model }),
+  })
+}
+
+export function fetchWhisperModelStatus(model: string) {
+  return request<WhisperModelInfo>(`/api/settings/whisper-models/status/${encodeURIComponent(model)}`)
+}
+
+export type JobLogEntry = {
+  timestamp: string
+  time_label: string
+  level: "info" | "progress" | "warn" | "error" | "success"
+  progress: number
+  message: string
+}
+
+export type JobLogsResult = {
+  job_id: string
+  status: "queued" | "running" | "succeeded" | "failed"
+  progress: number
+  message: string
+  created_at: string
+  finished_at: string | null
+  logs: JobLogEntry[]
+}
+
+export function fetchJobLogs(jobId: string) {
+  return request<JobLogsResult>(`/api/jobs/${encodeURIComponent(jobId)}/logs`)
 }
 
 export type OpenAIProbePayload = {
@@ -556,6 +610,57 @@ export async function renameBgmFile(filename: string, newTitle: string) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ filename, new_title: newTitle }),
+  })
+}
+
+export type SubtitleSegment = {
+  id: string
+  start: number
+  end: number
+  text: string
+}
+
+export type SubtitlesData = {
+  job_id: string
+  has_subtitles: boolean
+  subtitles: SubtitleSegment[]
+  srt_content: string | null
+}
+
+export function fetchJobSubtitles(jobId: string) {
+  return request<SubtitlesData>(`/api/jobs/${jobId}/subtitles`)
+}
+
+export function reburnJobSubtitles(
+  jobId: string,
+  subtitles: SubtitleSegment[],
+  subtitlePosition: "high" | "mid" | "low" = "high"
+) {
+  return request<{ job: Job; subtitles: SubtitleSegment[]; srt_content: string }>(
+    `/api/jobs/${jobId}/subtitles/reburn`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subtitles, subtitle_position: subtitlePosition }),
+    }
+  )
+}
+
+export function exportJobSrtUrl(jobId: string) {
+  return `/api/jobs/${jobId}/subtitles/export-srt`
+}
+
+export function retryJob(jobId: string) {
+  return request<Job>(`/api/jobs/${jobId}/retry`, {
+    method: "POST",
+  })
+}
+
+export function retryJobsBatch(jobIds: string[]) {
+  return request<{ jobs: Job[] }>(`/api/jobs/retry-batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_ids: jobIds }),
   })
 }
 

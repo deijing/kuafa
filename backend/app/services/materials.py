@@ -110,6 +110,20 @@ def get_group(group_id: str) -> GroupOut:
     raise KeyError("素材组不存在")
 
 
+def find_group(group_id: str) -> GroupOut | None:
+    for group in list_groups(include_materials=True):
+        if group.id == group_id:
+            return group
+    return None
+
+
+def find_material(material_id: str) -> MaterialOut | None:
+    for m in list_materials():
+        if m.id == material_id:
+            return m
+    return None
+
+
 def get_materials_by_ids(ids: list[str]) -> list[MaterialOut]:
     by_id = {m.id: m for m in list_materials()}
     missing = [i for i in ids if i not in by_id]

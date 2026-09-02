@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 
@@ -40,6 +40,7 @@ from app.models import (
     ExtractHeadlinesRequest,
     JobCoverRequest,
     JobExportZipRequest,
+    JobRetryBatchRequest,
     EnvCheckItem,
     EnvCheckResult,
     GenerateRequest,
@@ -50,10 +51,16 @@ from app.models import (
     OpenAIModelsOut,
     OpenAIProbeRequest,
     OpenAITestOut,
+    ReburnSubtitlesRequest,
+    JobLogsOut,
     RenameBgmRequest,
     RenameGroupRequest,
+    SubtitleSegment,
+    SubtitlesOut,
     TranscriptionTestOut,
     TranscriptionTestRequest,
+    WhisperModelDownloadRequest,
+    WhisperModelInfoOut,
     UpdateApiSecretsRequest,
     UpdateLibrarySettingsRequest,
 )
@@ -66,9 +73,12 @@ from app.services.covers import (
     resolve_media_path,
 )
 from app.services.ffmpeg_pipeline import probe
-from app.services.jobs import jobs
+from app.services.jobs import _RUN_SEMAPHORE, jobs
+from app.models import JobStatus
 from app.services.materials import (
     create_group,
+    find_group,
+    find_material,
     get_group,
     list_groups,
     list_materials,
@@ -84,14 +94,20 @@ from app.services.ffmpeg_pipeline import (
 )
 from app.services.openai_client import OpenAICompatError, list_models, test_connection
 from app.services.secrets import secrets_status, update_secrets
-from app.services.transcription import test_transcription_engine
+from app.services.transcription import (
+    check_whisper_model_status,
+    list_whisper_models,
+    start_download_whisper_model,
+    test_transcription_engine,
+)
 
 
 ensure_dirs()
 seed_demo_group_from_case()
 ensure_ffmpeg_configured()
+jobs.fail_interrupted_jobs()
 
-app = FastAPI(title="快发 API", version="1.6.1")
+app = FastAPI(title="快发 API", version="1.9.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -589,6 +605,26 @@ def delete_job(job_id: str) -> JobOut:
         raise HTTPException(400, str(exc)) from exc
 
 
+@app.post("/api/jobs/{job_id}/retry", response_model=JobOut)
+def retry_job(job_id: str) -> JobOut:
+    """断点继续重试失败或中断的任务：复用 ASR 缓存与中间产物。"""
+    try:
+        return jobs.retry(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"重试任务失败: {exc}") from exc
+
+
+@app.post("/api/jobs/retry-batch", response_model=BatchGenerateOut)
+def retry_batch_jobs(req: JobRetryBatchRequest) -> BatchGenerateOut:
+    """批量断点继续重试任务。"""
+    retried = jobs.retry_batch(req.job_ids)
+    return BatchGenerateOut(jobs=retried)
+
+
 @app.post("/api/jobs/{job_id}/covers", response_model=JobOut)
 def generate_job_covers(job_id: str, req: JobCoverRequest | None = None) -> JobOut:
     """为特定成片重新生成或扩充配套爆款封面。"""
@@ -604,6 +640,101 @@ def generate_job_covers(job_id: str, req: JobCoverRequest | None = None) -> JobO
         raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/jobs/{job_id}/subtitles", response_model=SubtitlesOut)
+def get_job_subtitles(job_id: str) -> SubtitlesOut:
+    """获取特定成片的对齐字幕列表与 SRT 文本。"""
+    import json
+    from app.services.sell_renderer import expand_to_subtitle_chunks, generate_srt_content
+
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在")
+    subs_path = settings.outputs_dir / f"{job_id}_subtitles.json"
+    if subs_path.exists():
+        try:
+            data = json.loads(subs_path.read_text(encoding="utf-8"))
+            # 自动展开为逐句短字幕（单行 <=10 字），与视频画面 1:1 精准对齐
+            expanded = expand_to_subtitle_chunks(data, max_chars=10)
+            sub_objs = [
+                SubtitleSegment(
+                    id=f"sub_{i}",
+                    start=float(item.start),
+                    end=float(item.end),
+                    text=str(item.text),
+                )
+                for i, item in enumerate(expanded)
+            ]
+            srt = generate_srt_content([s.model_dump() for s in sub_objs])
+            return SubtitlesOut(
+                job_id=job_id,
+                has_subtitles=len(sub_objs) > 0,
+                subtitles=sub_objs,
+                srt_content=srt,
+            )
+        except Exception:
+            pass
+    return SubtitlesOut(
+        job_id=job_id,
+        has_subtitles=False,
+        subtitles=[],
+        srt_content=None,
+    )
+
+
+@app.post("/api/jobs/{job_id}/subtitles/reburn")
+def reburn_subtitles_endpoint(job_id: str, req: ReburnSubtitlesRequest) -> dict[str, Any]:
+    """人工校验修正字幕后，重新烧录字幕并替换成片。"""
+    from app.services.sell_renderer import generate_srt_content, reburn_job_subtitles
+
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在")
+    if job.status in (JobStatus.queued, JobStatus.running):
+        raise HTTPException(400, "原成片仍在渲染中，请稍后再试")
+    try:
+        with _RUN_SEMAPHORE:
+            dur, updated = reburn_job_subtitles(
+                job_id,
+                [s.model_dump() for s in req.subtitles],
+                subtitle_position=req.subtitle_position,
+            )
+        updated_job = jobs.get(job_id)
+        srt = generate_srt_content(updated)
+        return {
+            "job": updated_job,
+            "subtitles": updated,
+            "srt_content": srt,
+        }
+    except Exception as exc:
+        raise HTTPException(400, f"字幕重新烧录失败: {exc}") from exc
+
+
+@app.get("/api/jobs/{job_id}/subtitles/export-srt")
+def export_job_srt(job_id: str) -> Response:
+    """下载成片的标准 SRT 字幕文件。"""
+    import json
+    from app.services.sell_renderer import generate_srt_content
+
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在")
+    subs_path = settings.outputs_dir / f"{job_id}_subtitles.json"
+    if not subs_path.exists():
+        raise HTTPException(404, "该成片暂无字幕数据")
+    try:
+        data = json.loads(subs_path.read_text(encoding="utf-8"))
+        srt = generate_srt_content(data)
+        return Response(
+            content=srt.encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="kuafa_{job_id}.srt"',
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(400, f"导出 SRT 失败: {exc}") from exc
 
 
 @app.post("/api/jobs/export-zip")
@@ -685,7 +816,7 @@ def extract_frame_from_video(req: ExtractFrameRequest) -> ExtractFrameOut:
             if p.exists():
                 video_path = p
     elif req.material_id:
-        mat = store.get_material(req.material_id)
+        mat = find_material(req.material_id)
         if mat and mat.path:
             p = Path(mat.path)
             if p.exists():
@@ -700,7 +831,7 @@ def extract_frame_from_video(req: ExtractFrameRequest) -> ExtractFrameOut:
             # 前端视频地址格式：/api/materials/{id}/video
             parts = req.video_url.split("/")
             if len(parts) >= 5 and parts[4] == "video":
-                mat = store.get_material(parts[3])
+                mat = find_material(parts[3])
                 if mat and mat.path and Path(mat.path).exists():
                     video_path = Path(mat.path)
         # 不再接受任意本地文件系统路径，防止任意文件访问
@@ -751,15 +882,15 @@ def extract_headlines(req: ExtractHeadlinesRequest) -> ExtractHeadlinesOut:
         if job and job.output_path and Path(job.output_path).exists():
             video_path = Path(job.output_path)
             if not group_name and job.group_id:
-                grp = store.get_group(job.group_id)
+                grp = find_group(job.group_id)
                 if grp:
                     group_name = grp.name
     elif req.material_id:
-        mat = store.get_material(req.material_id)
+        mat = find_material(req.material_id)
         if mat and mat.path and Path(mat.path).exists():
             video_path = Path(mat.path)
             if not group_name and mat.group_id:
-                grp = store.get_group(mat.group_id)
+                grp = find_group(mat.group_id)
                 if grp:
                     group_name = grp.name
     elif req.video_url:
@@ -772,7 +903,7 @@ def extract_headlines(req: ExtractHeadlinesRequest) -> ExtractHeadlinesOut:
             # 前端视频地址格式：/api/materials/{id}/video
             parts = req.video_url.split("/")
             if len(parts) >= 5 and parts[4] == "video":
-                mat = store.get_material(parts[3])
+                mat = find_material(parts[3])
                 if mat and mat.path and Path(mat.path).exists():
                     video_path = Path(mat.path)
         # 不再接受任意本地文件系统路径，防止任意文件访问
@@ -889,3 +1020,31 @@ def api_test_transcription(req: TranscriptionTestRequest) -> TranscriptionTestOu
         model_size=req.model,
     )
     return TranscriptionTestOut(**result)
+
+
+@app.get("/api/settings/whisper-models", response_model=list[WhisperModelInfoOut])
+def api_list_whisper_models() -> list[WhisperModelInfoOut]:
+    """获取所有支持的本地 Whisper 模型列表及其在本地的下载就绪状态。"""
+    return [WhisperModelInfoOut(**m) for m in list_whisper_models()]
+
+
+@app.post("/api/settings/whisper-models/download", response_model=WhisperModelInfoOut)
+def api_download_whisper_model(req: WhisperModelDownloadRequest) -> WhisperModelInfoOut:
+    """触发后台下载指定 Whisper 模型权重文件。"""
+    task = start_download_whisper_model(req.model)
+    st = check_whisper_model_status(req.model)
+    st.update(task)
+    return WhisperModelInfoOut(**st)
+
+
+@app.get("/api/settings/whisper-models/status/{model_size}", response_model=WhisperModelInfoOut)
+def api_get_whisper_model_status(model_size: str) -> WhisperModelInfoOut:
+    """获取单个 Whisper 模型的本地就绪与下载进度状态。"""
+    st = check_whisper_model_status(model_size)
+    return WhisperModelInfoOut(**st)
+
+
+@app.get("/api/jobs/{job_id}/logs", response_model=JobLogsOut)
+def api_get_job_logs(job_id: str) -> JobLogsOut:
+    """获取指定任务的实时流水日志与进度状态。"""
+    return jobs.get_logs(job_id)

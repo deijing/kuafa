@@ -9,6 +9,7 @@ import { DashboardView } from "@/components/views/DashboardView"
 import { GeneratorView } from "@/components/views/GeneratorView"
 import { HistoryView } from "@/components/views/HistoryView"
 import { LibraryView } from "@/components/views/LibraryView"
+import { MaterialCutView } from "@/components/views/MaterialCutView"
 import { ToastContainer } from "@/components/layout/ToastContainer"
 import { ActiveJobBanner } from "@/components/layout/ActiveJobBanner"
 import { MaterialsProvider } from "@/hooks/materials-provider"
@@ -25,9 +26,10 @@ export function App() {
     if (
       location.pathname !== TAB_PATHS.batch &&
       location.pathname !== TAB_PATHS.generator &&
+      location.pathname !== TAB_PATHS["material-cut"] &&
       location.pathname !== TAB_PATHS.cover
     ) {
-      navigate(TAB_PATHS.batch)
+      navigate(TAB_PATHS["material-cut"])
     }
     setTimeout(() => {
       window.dispatchEvent(new CustomEvent("kuafa:new-project"))
@@ -79,6 +81,14 @@ export function App() {
                   <GeneratorView
                     onGoLibrary={() => navigate(TAB_PATHS.library)}
                     onGoHistory={() => navigate(TAB_PATHS.history)}
+                  />
+                }
+              />
+              <Route
+                path={TAB_PATHS["material-cut"]}
+                element={
+                  <MaterialCutView
+                    onGoLibrary={() => navigate(TAB_PATHS.library)}
                   />
                 }
               />

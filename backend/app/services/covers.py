@@ -557,7 +557,8 @@ class CoverJobManager:
             elif image_url.startswith("/api/materials/"):
                 parts = image_url.split("/")
                 if len(parts) >= 5 and parts[4] == "video":
-                    mat = store.get_material(parts[3])
+                    from app.services.materials import find_material
+                    mat = find_material(parts[3])
                     if mat and mat.path:
                         target_path = Path(mat.path)
 

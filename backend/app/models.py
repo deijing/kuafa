@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -77,7 +77,7 @@ class GenerateRequest(BaseModel):
     bgm_volume: int = Field(default=25, ge=0, le=100)  # 音量 0-100%
     bgm_file: str | None = None  # 上传或选中的背景音乐文件名
     title: str = "限时特惠 · 直播高光合集"
-    mode: Literal["sell", "highlight"] = "sell"
+    mode: Literal["sell", "highlight", "material_stitch"] = "sell"
     # bargain / detail / silence — 混剪规则勾选
     extract_rules: dict[str, bool] | None = None
     # 否词与违规口播过滤（如 1号链接、小黄车、去拍、关注主播等）
@@ -116,7 +116,7 @@ class BatchGenerateRequest(BaseModel):
     bgm_volume: int = Field(default=25, ge=0, le=100)
     bgm_file: str | None = None
     title: str | None = None
-    mode: Literal["sell", "highlight"] = "sell"
+    mode: Literal["sell", "highlight", "material_stitch"] = "sell"
     extract_rules: dict[str, bool] | None = None
     negative_words: list[str] = Field(default_factory=list)
     filter_live_pitch: bool = True
@@ -225,9 +225,10 @@ class ApiSecretsOut(BaseModel):
     openai_model: str
     # OpenAI GPT：none | low | medium | high | xhigh | max
     openai_reasoning_effort: str = "medium"
-    # 字幕转写模式：local（本地 Whisper 离线识别）| bcut（云端必剪 ASR）
-    transcription_engine: Literal["local", "bcut"] = "local"
+    # 字幕转写模式：bcut（云端必剪 ASR）| local（本地 Whisper 离线识别）
+    transcription_engine: Literal["local", "bcut"] = "bcut"
     local_whisper_model: str = "base"
+    burn_subtitles_default: bool = True
 
 
 class UpdateApiSecretsRequest(BaseModel):
@@ -240,6 +241,7 @@ class UpdateApiSecretsRequest(BaseModel):
     openai_reasoning_effort: str | None = None
     transcription_engine: str | None = None
     local_whisper_model: str | None = None
+    burn_subtitles_default: str | None = None
 
 
 class TranscriptionTestRequest(BaseModel):
@@ -254,6 +256,24 @@ class TranscriptionTestOut(BaseModel):
     latency_ms: int | None = None
     model: str | None = None
     preview_text: str | None = None
+
+
+class WhisperModelInfoOut(BaseModel):
+    name: str
+    label: str
+    size_label: str
+    description: str
+    recommended: bool = False
+    is_downloaded: bool
+    model_path: str | None = None
+    is_downloading: bool = False
+    download_status: str = "idle"
+    download_message: str = ""
+    download_error: str | None = None
+
+
+class WhisperModelDownloadRequest(BaseModel):
+    model: str = "small"
 
 
 class OpenAIProbeRequest(BaseModel):
@@ -305,6 +325,24 @@ class EnvCheckResult(BaseModel):
     items: list[EnvCheckItem]
 
 
+class JobLogEntry(BaseModel):
+    timestamp: str
+    time_label: str
+    level: str = "info"  # info | progress | warn | error | success
+    progress: int = 0
+    message: str
+
+
+class JobLogsOut(BaseModel):
+    job_id: str
+    status: JobStatus
+    progress: int
+    message: str = ""
+    created_at: str
+    finished_at: str | None = None
+    logs: list[JobLogEntry] = Field(default_factory=list)
+
+
 class JobOut(BaseModel):
     id: str
     batch_id: str | None = None
@@ -322,6 +360,12 @@ class JobOut(BaseModel):
     error: str | None = None
     headline: str | None = None
     covers: list[CoverResult] = Field(default_factory=list)
+    req_params: dict[str, Any] | None = None
+    logs: list[JobLogEntry] = Field(default_factory=list)
+
+
+class JobRetryBatchRequest(BaseModel):
+    job_ids: list[str] = Field(min_length=1)
 
 
 class BatchGenerateOut(BaseModel):
@@ -342,4 +386,23 @@ class BgmOut(BaseModel):
 class RenameBgmRequest(BaseModel):
     filename: str
     new_title: str
+
+
+class SubtitleSegment(BaseModel):
+    id: str
+    start: float
+    end: float
+    text: str
+
+
+class SubtitlesOut(BaseModel):
+    job_id: str
+    has_subtitles: bool
+    subtitles: list[SubtitleSegment]
+    srt_content: str | None = None
+
+
+class ReburnSubtitlesRequest(BaseModel):
+    subtitles: list[SubtitleSegment]
+    subtitle_position: Literal["high", "mid", "low"] = "high"
 

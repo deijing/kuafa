@@ -5,6 +5,7 @@ import {
   Layers,
   Music,
   PieChart,
+  Scissors,
   WandSparkles,
   Zap,
 } from "lucide-react"
@@ -26,7 +27,8 @@ const navItems: {
   { id: "library", label: "素材库", icon: Clapperboard },
   { id: "bgm", label: "背景音乐库", icon: Music },
   { id: "generator", label: "智能混剪", icon: WandSparkles },
-  { id: "batch", label: "批量制作", icon: Layers, hot: true },
+  { id: "material-cut", label: "按素材分切", icon: Scissors, hot: true },
+  { id: "batch", label: "批量制作", icon: Layers },
   { id: "cover", label: "封面生成", icon: Image },
   { id: "history", label: "成片历史", icon: History },
 ]

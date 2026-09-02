@@ -40,8 +40,8 @@ class Settings(BaseSettings):
     ffprobe_bin: str = "ffprobe"
     subtitle_font: str = ""
 
-    # 字幕转写模式：local（本地 Whisper 离线识别）| bcut（云端必剪 ASR）
-    transcription_engine: str = "local"
+    # 字幕转写模式：bcut（云端必剪 ASR，极速高精度/中英带货优化）| local（本地 Whisper 离线识别）
+    transcription_engine: str = "bcut"
     local_whisper_model: str = "base"  # tiny | base | small | medium | large-v3
 
     # CatsAPI · GPT Image 2
