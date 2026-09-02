@@ -236,8 +236,11 @@ def fuse_and_pad_clips(
                 actual_head = min(actual_head, max(0.0, (g_start - prev_end) * 0.45))
         cut_start = max(0.0, g_start - actual_head)
 
-        # 计算片尾保护边距 (tail_pad)，彻底解决句尾吞字
-        actual_tail = min(tail_pad, max(0.0, src_dur - g_end))
+        # 计算片尾保护边距 (tail_pad)，彻底解决句尾吞字与话说一半被掐断
+        # 当切换到不同素材 (不同商品) 时，给予 0.35s ~ 0.50s 的充分呼吸气口与尾音自然衰减缓冲
+        is_cross_material = (i + 1 == len(groups)) or (i + 1 < len(groups) and groups[i + 1][0].path != path)
+        effective_tail_pad = max(0.35, tail_pad) if is_cross_material else tail_pad
+        actual_tail = min(effective_tail_pad, max(0.0, src_dur - g_end))
         if i + 1 < len(groups) and groups[i + 1][0].path == path:
             nxt_start = groups[i + 1][0].start
             if nxt_start >= g_end:

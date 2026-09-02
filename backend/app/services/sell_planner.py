@@ -277,6 +277,15 @@ def is_repetitive_sentence(t1: str, t2: str) -> bool:
         return True
     if has_long_common_substring(s1, s2, min_len=6):
         return True
+def is_dangling_tail(text: str) -> bool:
+    """判断句子末尾是否属于没说完的话头/悬空连接词/未完成半句话。"""
+    t = text.strip()
+    if not t:
+        return True
+    if _DANGLING_CONNECTIVES.search(t):
+        return True
+    if t.endswith(("，", ",", "、", ":", "：", "-", "~", "…", "并且", "而且", "然后", "因为", "所以", "如果", "但是")):
+        return True
     return False
 
 
@@ -371,6 +380,10 @@ def extract_narrative_blocks(
                 )
                 seen_in_block.append(stext)
 
+            # 严格确保段落末尾语义完整：若尾部单句属于没讲完的话头，剔除尾部残句，保证上一句完全说完再切！
+            while len(cleaned_clips) > 1 and is_dangling_tail(cleaned_clips[-1].text):
+                cleaned_clips.pop()
+
             if not cleaned_clips:
                 curr_segs = []
                 return
@@ -388,6 +401,7 @@ def extract_narrative_blocks(
             detail_cnt = len(DETAIL_RE.findall(b_text))
             price_cnt = len(PRICE_RE.findall(b_text))
             sluggish_cnt = len(SLUGGISH_CHITCHAT_RE.findall(b_text))
+            is_single_dangling = len(cleaned_clips) == 1 and is_dangling_tail(b_text)
 
             # 确定段落的核心带货角色
             role = "filler"
@@ -423,6 +437,10 @@ def extract_narrative_blocks(
             # 严厉惩罚拖沓、闲聊与无意义废话
             if sluggish_cnt > 0:
                 score -= sluggish_cnt * 4.0
+
+            # 严惩半截没说完的话头残句，防止衔接时断句吞字
+            if is_single_dangling:
+                score -= 15.0
 
             # 若完全无任何讲品关键词（纯口水话），大幅降分防止拖沓
             if hook_cnt == 0 and detail_cnt == 0 and price_cnt == 0:
@@ -769,23 +787,28 @@ def build_material_coverage_plan(
                     s_dur = max(0.2, s.end - s.start)
                     picked_segs.append(s)
                     curr_dur += s_dur
-                    if curr_dur >= budget_per_mat:
+                    if curr_dur >= budget_per_mat and not is_dangling_tail(s.text):
                         break
-                mat_blocks = [
-                    NarrativeBlock(
-                        path=path,
-                        start=picked_segs[0].start,
-                        end=picked_segs[-1].end,
-                        text="".join(s.text.strip() for s in picked_segs),
-                        clips=[
-                            EditClip(path, s.start, s.end, s.text.strip(), "intro")
-                            for s in picked_segs
-                        ],
-                        role="intro",
-                        total_score=1.0,
-                        source_index=mat_idx,
-                    )
-                ]
+
+                while len(picked_segs) > 1 and is_dangling_tail(picked_segs[-1].text):
+                    picked_segs.pop()
+
+                if picked_segs:
+                    mat_blocks = [
+                        NarrativeBlock(
+                            path=path,
+                            start=picked_segs[0].start,
+                            end=picked_segs[-1].end,
+                            text="".join(s.text.strip() for s in picked_segs),
+                            clips=[
+                                EditClip(path, s.start, s.end, s.text.strip(), "intro")
+                                for s in picked_segs
+                            ],
+                            role="intro",
+                            total_score=1.0,
+                            source_index=mat_idx,
+                        )
+                    ]
             else:
                 # 若完全无有效转写，从原视频按时长安全抽样
                 from app.services.ffmpeg_pipeline import probe_cached
