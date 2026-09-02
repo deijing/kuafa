@@ -107,7 +107,7 @@ seed_demo_group_from_case()
 ensure_ffmpeg_configured()
 jobs.fail_interrupted_jobs()
 
-app = FastAPI(title="快发 API", version="1.9.1")
+app = FastAPI(title="快发 API", version="1.9.2")
 
 app.add_middleware(
     CORSMiddleware,
