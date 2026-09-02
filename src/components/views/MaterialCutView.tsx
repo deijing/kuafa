@@ -174,7 +174,7 @@ export function MaterialCutView({ onGoLibrary }: MaterialCutViewProps) {
     setNegativeWords((prev) => prev.filter((w) => w !== word))
   }
 
-  const [rules] = useState<Record<string, boolean>>(
+  const [rules, setRules] = useState<Record<string, boolean>>(
     Object.fromEntries(extractRules.map((r) => [r.id, r.checked]))
   )
 
@@ -1152,6 +1152,43 @@ export function MaterialCutView({ onGoLibrary }: MaterialCutViewProps) {
             <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
               AI 会深度理解每一个勾选素材的口播内容，识别「痛点Hook ➔ 面料细节 ➔ 穿搭展示 ➔ 破价逼单」，智能排定出场次序并抽取最黄金连贯段落。
             </p>
+          </div>
+
+          {/* 4. 核心内容提取 */}
+          <div>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-[#111827] dark:text-slate-200 mb-1.5">
+              核心内容提取
+            </h4>
+            <p className="mb-3 text-[13px] text-[#9CA3AF] dark:text-slate-400 leading-relaxed">
+              默认用必剪 ASR 整句切割（不切半字），结构：前段介绍商品 → 中后段讲价格/促销。
+            </p>
+            <div className="flex flex-col gap-1">
+              {extractRules.map((rule) => (
+                <label
+                  key={rule.id}
+                  className="flex cursor-pointer items-center justify-between rounded-xl py-2.5 px-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                >
+                  <div className="flex items-center gap-3">
+                    <Checkbox
+                      checked={rules[rule.id]}
+                      onCheckedChange={(v) =>
+                        setRules((prev) => ({ ...prev, [rule.id]: Boolean(v) }))
+                      }
+                      disabled={busy}
+                      className="rounded-[4px] border-slate-300 dark:border-slate-700 data-checked:bg-blue-600 data-checked:border-blue-600"
+                    />
+                    <span className="text-sm font-medium text-[#4B5563] dark:text-slate-300">
+                      {rule.label}
+                    </span>
+                  </div>
+                  {rule.badge ? (
+                    <span className="inline-flex items-center rounded-[4px] bg-[rgba(16,185,129,0.1)] dark:bg-emerald-950/60 px-2 py-0.5 text-[11px] font-medium text-[#059669] dark:text-emerald-400 border border-emerald-500/20">
+                      {rule.badge}
+                    </span>
+                  ) : null}
+                </label>
+              ))}
+            </div>
           </div>
 
           <div className="my-5 border-b border-[#F3F4F6] dark:border-slate-800" />
