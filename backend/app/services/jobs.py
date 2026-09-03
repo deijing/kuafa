@@ -2,6 +2,7 @@ import concurrent.futures
 import logging
 import re
 import shutil
+import subprocess
 import threading
 import uuid
 import json
@@ -14,6 +15,7 @@ from app.models import (
     BatchGenerateRequest,
     DurationPreference,
     GenerateRequest,
+    JobCancelledError,
     JobLogEntry,
     JobLogsOut,
     JobOut,
@@ -22,8 +24,10 @@ from app.models import (
 from app.services import db as store
 from app.services.ffmpeg_pipeline import (
     build_segment_plan,
+    current_job_id_var,
     probe,
     render_highlight_reel,
+    set_process_lifecycle_hooks,
 )
 from app.services.materials import get_materials_by_ids
 from app.services.sell_planner import (
@@ -116,7 +120,35 @@ class JobManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._job_logs: dict[str, list[JobLogEntry]] = {}
+        self._cancel_flags: dict[str, bool] = {}
+        self._cancel_events: dict[str, threading.Event] = {}
+        self._job_processes: dict[str, set[subprocess.Popen]] = {}
+        set_process_lifecycle_hooks(
+            on_start=self._on_proc_start,
+            on_finish=self._on_proc_finish,
+            is_canceled=self.is_canceled,
+        )
         store.ensure_db()
+
+    def _on_proc_start(self, job_id: str, proc: subprocess.Popen) -> None:
+        with self._lock:
+            if job_id not in self._job_processes:
+                self._job_processes[job_id] = set()
+            self._job_processes[job_id].add(proc)
+
+    def _on_proc_finish(self, job_id: str, proc: subprocess.Popen) -> None:
+        with self._lock:
+            if job_id in self._job_processes:
+                self._job_processes[job_id].discard(proc)
+
+    def is_canceled(self, job_id: str) -> bool:
+        with self._lock:
+            return self._cancel_flags.get(job_id, False)
+
+    def _cleanup_job(self, job_id: str) -> None:
+        with self._lock:
+            self._job_processes.pop(job_id, None)
+            self._cancel_events.pop(job_id, None)
 
     def fail_interrupted_jobs(self) -> None:
         """应用启动时把上次残留的 running/queued 任务标记为 failed。"""
@@ -235,8 +267,8 @@ class JobManager:
                     updated = updated.model_copy(update={"processing_seconds": secs})
             store.upsert_generate_job(updated)
 
-    def delete(self, job_id: str) -> JobOut:
-        """删除成片记录，并清理成片 mp4 + work 工程目录（不碰素材库）。"""
+    def cancel(self, job_id: str) -> JobOut:
+        """停止正在进行或排队中的任务，立即杀死正在执行的 FFmpeg 等子进程。"""
         if not _JOB_ID_RE.match(job_id):
             raise ValueError("无效的任务 ID")
 
@@ -244,9 +276,79 @@ class JobManager:
             job = store.get_generate_job(job_id)
             if not job:
                 raise KeyError("任务不存在")
-            if job.status in (JobStatus.queued, JobStatus.running):
-                raise ValueError("任务进行中，请结束后再删除")
 
+            # 若任务已处于终态，直接返回
+            if job.status not in (JobStatus.queued, JobStatus.running):
+                return hydrate_processing_seconds(job)
+
+            # 标记已取消并触发事件
+            self._cancel_flags[job_id] = True
+            event = self._cancel_events.get(job_id)
+            if event:
+                event.set()
+
+            # 立即杀死所有关联该任务的后台子进程（FFmpeg 等）
+            procs = list(self._job_processes.get(job_id, set()))
+            for proc in procs:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+            now = datetime.now(timezone.utc).isoformat()
+            updated = job.model_copy(
+                update={
+                    "status": JobStatus.failed,
+                    "message": "任务已手动停止",
+                    "error": "canceled",
+                    "finished_at": now,
+                }
+            )
+            if updated.created_at:
+                secs = processing_seconds_between(updated.created_at, now)
+                if secs is not None:
+                    updated = updated.model_copy(update={"processing_seconds": secs})
+
+            store.upsert_generate_job(updated)
+
+        self.add_log(job_id, "任务已被用户手动停止", level="warn", progress=job.progress)
+        return hydrate_processing_seconds(updated)
+
+    def cancel_batch(self, job_ids: list[str]) -> list[JobOut]:
+        """批量停止多个指定的成片任务。"""
+        results: list[JobOut] = []
+        for jid in job_ids:
+            try:
+                results.append(self.cancel(jid))
+            except Exception as exc:
+                logger.warning("停止任务 %s 失败: %s", jid, exc)
+        return results
+
+    def cancel_all_active(self) -> list[JobOut]:
+        """停止所有正在运行或排队中的成片任务。"""
+        with self._lock:
+            active_ids = [
+                j.id for j in store.list_generate_jobs()
+                if j.status in (JobStatus.queued, JobStatus.running)
+            ]
+        return self.cancel_batch(active_ids)
+
+    def delete(self, job_id: str) -> JobOut:
+        """删除成片记录，并清理成片 mp4 + work 工程目录（不碰素材库）。如果任务正在进行中则先停止。"""
+        if not _JOB_ID_RE.match(job_id):
+            raise ValueError("无效的任务 ID")
+
+        with self._lock:
+            job = store.get_generate_job(job_id)
+            if not job:
+                raise KeyError("任务不存在")
+
+        if job.status in (JobStatus.queued, JobStatus.running):
+            self.cancel(job_id)
+            import time
+            time.sleep(0.1)
+
+        with self._lock:
             outputs_root = settings.outputs_dir.resolve()
             for extra in (
                 settings.outputs_dir / f"{job_id}.mp4",
@@ -301,6 +403,9 @@ class JobManager:
         )
         with self._lock:
             store.upsert_generate_job(job)
+            self._cancel_flags[job_id] = False
+            self._cancel_events[job_id] = threading.Event()
+            self._job_processes[job_id] = set()
 
         self.add_log(job_id, f"任务已创建并进入调度队列（共包含 {len(materials)} 个素材视频）", level="info", progress=0)
 
@@ -385,6 +490,9 @@ class JobManager:
                 "req_params": req.model_dump(),
             })
             store.upsert_generate_job(job)
+            self._cancel_flags[job_id] = False
+            self._cancel_events[job_id] = threading.Event()
+            self._job_processes[job_id] = set()
 
         self.add_log(job_id, f"触发任务断点继续重试（起始进度 {init_progress}%: {init_msg}）", level="info", progress=init_progress)
 
@@ -509,8 +617,18 @@ class JobManager:
         return BatchGenerateOut(jobs=created)
 
     def _run(self, job_id: str, materials, req: GenerateRequest) -> None:
-        _RUN_SEMAPHORE.acquire()
+        token = current_job_id_var.set(job_id)
+        acquired = False
         try:
+            while not self.is_canceled(job_id):
+                if _RUN_SEMAPHORE.acquire(timeout=0.2):
+                    acquired = True
+                    break
+
+            if self.is_canceled(job_id):
+                logger.info("任务 %s 在排队时已被取消", job_id)
+                return
+
             add_subs = (
                 req.add_subtitles
                 if req.add_subtitles is not None
@@ -524,6 +642,8 @@ class JobManager:
             out_path = settings.outputs_dir / f"{job_id}.mp4"
 
             def on_progress(pct: int, message: str, level: str = "info") -> None:
+                if self.is_canceled(job_id):
+                    raise JobCancelledError("任务已被手动停止")
                 p = min(99, max(0, pct))
                 self.add_log(job_id, message, level=level, progress=p)
                 self._update(
@@ -532,6 +652,9 @@ class JobManager:
                     message=message,
                     status=JobStatus.running,
                 )
+
+            if self.is_canceled(job_id):
+                raise JobCancelledError("任务已被手动停止")
 
             # 🚀 1. 检查成片是否已完整存在（例如之前仅在最后的元数据/大字报或接口返回阶段异常中断）
             if out_path.exists() and out_path.stat().st_size > 50000:
@@ -572,6 +695,8 @@ class JobManager:
                 transcribed = []
                 total = len(materials)
                 for idx, m in enumerate(materials):
+                    if self.is_canceled(job_id):
+                        raise JobCancelledError("任务已被手动停止")
                     if not all_cached:
                         on_progress(
                             3 + int(25 * idx / max(total, 1)),
@@ -732,16 +857,39 @@ class JobManager:
                 output_path=str(out_path),
                 duration=duration,
             )
-        except Exception as exc:  # noqa: BLE001
-            self.add_log(job_id, f"成片生成异常中断: {exc}", level="error", progress=0)
+        except JobCancelledError:
+            logger.info("任务 %s 已被用户手动停止并退出执行", job_id)
+            self.add_log(job_id, "任务已被用户手动停止", level="warn", progress=0)
             self._update(
                 job_id,
                 status=JobStatus.failed,
-                message="成片失败",
-                error=str(exc),
+                message="任务已手动停止",
+                error="canceled",
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
+        except Exception as exc:  # noqa: BLE001
+            if self.is_canceled(job_id):
+                logger.info("任务 %s 中止退出: %s", job_id, exc)
+                self.add_log(job_id, "任务已被用户手动停止", level="warn", progress=0)
+                self._update(
+                    job_id,
+                    status=JobStatus.failed,
+                    message="任务已手动停止",
+                    error="canceled",
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                )
+            else:
+                self.add_log(job_id, f"成片生成异常中断: {exc}", level="error", progress=0)
+                self._update(
+                    job_id,
+                    status=JobStatus.failed,
+                    message="成片失败",
+                    error=str(exc),
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                )
         finally:
+            current_job_id_var.reset(token)
+            self._cleanup_job(job_id)
             # 仅在渲染成功时清理中间剪辑工程目录 data/work/<job_id>
             # 若失败/中断则保留切片缓存，供后续「断点继续重试」秒级恢复已剪切片段
             job = store.get_generate_job(job_id)
@@ -752,7 +900,8 @@ class JobManager:
                         shutil.rmtree(work_dir)
                     except Exception:
                         pass
-            _RUN_SEMAPHORE.release()
+            if acquired:
+                _RUN_SEMAPHORE.release()
 
     def generate_covers_for_job(
         self,

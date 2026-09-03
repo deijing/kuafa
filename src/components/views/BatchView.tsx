@@ -16,6 +16,7 @@ import {
   ShieldAlert,
   SlidersHorizontal,
   Sparkles,
+  Square,
   Terminal,
   Upload,
   Volume2,
@@ -56,6 +57,8 @@ import {
   generateJobCovers,
   retryJob,
   retryJobsBatch,
+  stopJob,
+  stopBatchJobs,
   uploadBgm,
   type BatchGenerateResult,
   type BgmItem,
@@ -913,6 +916,62 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
       })
     } finally {
       setRetryingBatch(false)
+    }
+  }
+
+  const [stoppingJobId, setStoppingJobId] = useState<string | null>(null)
+  const [stoppingBatch, setStoppingBatch] = useState(false)
+
+  // 停止单条视频生成
+  async function handleStopJob(jobId: string) {
+    if (stoppingJobId === jobId) return
+    setStoppingJobId(jobId)
+    try {
+      const updated = await stopJob(jobId)
+      setJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)))
+      setAllHistoryJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)))
+      notify({
+        title: "任务已停止",
+        message: `成片「${updated.headline || jobId.slice(0, 8)}」已手动停止`,
+        type: "info",
+      })
+    } catch (err) {
+      notify({
+        title: "停止任务失败",
+        message: err instanceof Error ? err.message : "未知错误",
+        type: "error",
+      })
+    } finally {
+      setStoppingJobId(null)
+    }
+  }
+
+  // 批量停止正在处理的任务
+  async function handleStopBatch() {
+    const activeIds = displayedJobs
+      .filter((j) => j.status === "queued" || j.status === "running")
+      .map((j) => j.id)
+    if (!activeIds.length || stoppingBatch) return
+    setStoppingBatch(true)
+    try {
+      const stopped = await stopBatchJobs(activeIds)
+      const stoppedMap = new Map(stopped.map((j) => [j.id, j]))
+      setJobs((prev) => prev.map((j) => stoppedMap.get(j.id) || j))
+      setAllHistoryJobs((prev) => prev.map((j) => stoppedMap.get(j.id) || j))
+      setBusy(false)
+      notify({
+        title: "已停止批量任务",
+        message: `已停止 ${stopped.length} 条正在处理的视频任务`,
+        type: "info",
+      })
+    } catch (err) {
+      notify({
+        title: "停止批量任务失败",
+        message: err instanceof Error ? err.message : "未知错误",
+        type: "error",
+      })
+    } finally {
+      setStoppingBatch(false)
     }
   }
 
@@ -1961,6 +2020,29 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                   新建批次
                 </Button>
 
+                {displayedJobs.some((j) => j.status === "queued" || j.status === "running") ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={stoppingBatch}
+                    onClick={() => void handleStopBatch()}
+                    className="h-8 px-3 text-xs font-semibold border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-300 hover:bg-rose-100 cursor-pointer gap-1.5 rounded-xl shadow-2xs"
+                    title="停止当前所有正在处理的视频"
+                  >
+                    {stoppingBatch ? (
+                      <Loader2 className="size-3.5 animate-spin text-rose-500" />
+                    ) : (
+                      <Square className="size-3 fill-current text-rose-500" />
+                    )}
+                    <span>
+                      {stoppingBatch
+                        ? "正在停止…"
+                        : `全部停止 (${displayedJobs.filter((j) => j.status === "queued" || j.status === "running").length})`}
+                    </span>
+                  </Button>
+                ) : null}
+
                 {displayedJobs.some((j) => j.status === "failed") ? (
                   <Button
                     type="button"
@@ -2135,7 +2217,24 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                                 <span>日志</span>
                               </button>
                             </div>
-                            <div className="absolute top-2.5 right-2.5 z-10">
+                            <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void handleStopJob(job.id)
+                                }}
+                                disabled={stoppingJobId === job.id}
+                                className="px-2 py-0.5 rounded-md bg-rose-600/90 hover:bg-rose-700 backdrop-blur-md text-white text-[11px] font-semibold border border-rose-400/40 shadow-sm transition-colors cursor-pointer flex items-center gap-1"
+                                title="停止当前视频生成"
+                              >
+                                {stoppingJobId === job.id ? (
+                                  <Loader2 className="size-2.5 animate-spin" />
+                                ) : (
+                                  <Square className="size-2 fill-current" />
+                                )}
+                                <span>停止</span>
+                              </button>
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-600/90 backdrop-blur-md text-white text-[11px] font-semibold shadow-sm animate-pulse">
                                 <Loader2 className="size-3 animate-spin" />
                                 剪辑中
@@ -2160,11 +2259,16 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                             </div>
                           </div>
                         ) : (
-                          /* Failed State */
+                          /* Failed / Canceled State */
                           <div
-                            className="size-full flex flex-col items-center justify-center p-4 text-center bg-rose-950/40 relative cursor-pointer group/fail-log"
+                            className={cn(
+                              "size-full flex flex-col items-center justify-center p-4 text-center relative cursor-pointer group/fail-log",
+                              job.error === "canceled" || job.message?.includes("停止")
+                                ? "bg-amber-950/30"
+                                : "bg-rose-950/40"
+                            )}
                             onClick={() => setLogJob({ id: job.id, title: `${groupName} · 成片 #${index + 1}` })}
-                            title="点击查看失败详细日志"
+                            title="点击查看详细日志"
                           >
                             <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5">
                               <span className="px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-md text-white text-[11px] font-mono font-bold border border-white/10">
@@ -2176,7 +2280,7 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                                   e.stopPropagation()
                                   setLogJob({ id: job.id, title: `${groupName} · 成片 #${index + 1}` })
                                 }}
-                                className="px-1.5 py-0.5 rounded-md bg-black/60 hover:bg-rose-600/80 backdrop-blur-md text-slate-200 hover:text-white text-[10px] font-medium border border-white/10 transition-colors cursor-pointer flex items-center gap-1"
+                                className="px-1.5 py-0.5 rounded-md bg-black/60 hover:bg-slate-700/80 backdrop-blur-md text-slate-200 hover:text-white text-[10px] font-medium border border-white/10 transition-colors cursor-pointer flex items-center gap-1"
                                 title="查看执行日志"
                               >
                                 <Terminal className="size-3" />
@@ -2184,16 +2288,38 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                               </button>
                             </div>
                             <div className="absolute top-2.5 right-2.5 z-10">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-600 backdrop-blur-md text-white text-[11px] font-semibold shadow-sm">
-                                <XCircle className="size-3" />
-                                失败
-                              </span>
+                              {job.error === "canceled" || job.message?.includes("停止") ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-600/90 backdrop-blur-md text-white text-[11px] font-semibold shadow-sm border border-amber-400/30">
+                                  <Square className="size-2.5 fill-current" />
+                                  已停止
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-600 backdrop-blur-md text-white text-[11px] font-semibold shadow-sm">
+                                  <XCircle className="size-3" />
+                                  失败
+                                </span>
+                              )}
                             </div>
-                            <XCircle className="size-8 text-rose-400 mb-2" />
-                            <span className="text-xs text-rose-300 max-w-[85%] line-clamp-2">
-                              {job.error || "生成失败"}
+                            {job.error === "canceled" || job.message?.includes("停止") ? (
+                              <div className="flex size-10 items-center justify-center rounded-2xl bg-amber-500/20 text-amber-400 mb-2">
+                                <Square className="size-5 fill-current" />
+                              </div>
+                            ) : (
+                              <XCircle className="size-8 text-rose-400 mb-2" />
+                            )}
+                            <span
+                              className={cn(
+                                "text-xs max-w-[85%] line-clamp-2",
+                                job.error === "canceled" || job.message?.includes("停止")
+                                  ? "text-amber-300"
+                                  : "text-rose-300"
+                              )}
+                            >
+                              {job.error === "canceled" || job.message?.includes("停止")
+                                ? job.message || "任务已手动停止"
+                                : job.error || "生成失败"}
                             </span>
-                            <span className="text-[10px] text-rose-300 opacity-90 group-hover/fail-log:opacity-100 flex items-center gap-1 mt-1 bg-rose-950/80 px-2 py-0.5 rounded-full border border-rose-800/60 z-10">
+                            <span className="text-[10px] opacity-90 group-hover/fail-log:opacity-100 flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full border z-10 bg-black/40 text-slate-300 border-white/10">
                               <Terminal className="size-2.5" /> 查看详细日志
                             </span>
                           </div>
@@ -2400,6 +2526,22 @@ export function BatchView({ onGoLibrary }: BatchViewProps) {
                 <p className="mt-2 text-xs text-[#9CA3AF]">
                   ASR 转写 → AI 选句 → 9:16 剪辑拼接 → 字幕/BGM
                 </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleStopBatch()}
+                  disabled={stoppingBatch}
+                  className="mt-4 h-9 px-4 text-xs font-semibold rounded-xl border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-300 hover:bg-rose-100 cursor-pointer gap-1.5 shadow-sm"
+                  title="停止当前所有正在处理的视频"
+                >
+                  {stoppingBatch ? (
+                    <Loader2 className="size-3.5 animate-spin text-rose-500" />
+                  ) : (
+                    <Square className="size-3 fill-current text-rose-500" />
+                  )}
+                  <span>{stoppingBatch ? "正在停止…" : "停止批量处理"}</span>
+                </Button>
               </div>
             ) : (
               <div className="z-10 flex flex-col items-center justify-center p-8 text-center max-w-sm">

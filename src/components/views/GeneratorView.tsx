@@ -13,6 +13,7 @@ import {
   ShieldAlert,
   SlidersHorizontal,
   Sparkles,
+  Square,
   Terminal,
   Upload,
   Volume2,
@@ -49,6 +50,7 @@ import {
   fetchJobs,
   generateJobCovers,
   retryJob,
+  stopJob,
   uploadBgm,
   type BgmItem,
   type DurationPreference,
@@ -271,6 +273,12 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                 message: "单切片合成已完成，可以在右侧窗口直接预览及下载！",
                 type: "success",
               })
+            } else if (next.error === "canceled" || next.message?.includes("停止")) {
+              notify({
+                title: "任务已停止",
+                message: "视频生成任务已停止",
+                type: "info",
+              })
             } else {
               notify({
                 title: "智能成片失败",
@@ -286,6 +294,31 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
     }, 800)
     return () => window.clearInterval(timer)
   }, [job, notify])
+
+  const [stoppingJob, setStoppingJob] = useState(false)
+
+  async function handleStopJob(jobId: string) {
+    if (stoppingJob) return
+    setStoppingJob(true)
+    try {
+      const updated = await stopJob(jobId)
+      setJob(updated)
+      setBusy(false)
+      notify({
+        title: "任务已停止",
+        message: "视频生成处理已手动停止",
+        type: "info",
+      })
+    } catch (err) {
+      notify({
+        title: "停止任务失败",
+        message: err instanceof Error ? err.message : "未知错误",
+        type: "error",
+      })
+    } finally {
+      setStoppingJob(false)
+    }
+  }
 
   const [retryingJob, setRetryingJob] = useState(false)
 
@@ -1145,18 +1178,43 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
         <div className="p-5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/90 backdrop-blur-xs flex flex-col gap-2 shrink-0">
             {error ? <p className="text-center text-xs text-rose-500 font-medium">{error}</p> : null}
 
-            <Button
-              className="h-11 w-full rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold text-sm shadow-[0_4px_14px_0_rgba(37,99,235,0.35)] transition-all active:scale-[0.99] cursor-pointer flex items-center justify-center gap-2 border-none"
-              disabled={busy || !selectedIds.length}
-              onClick={() => void startGenerate()}
-            >
-              {busy ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
+            {busy ? (
+              <div className="flex items-center gap-2">
+                <Button
+                  className="h-11 flex-1 rounded-xl bg-blue-600/80 text-white font-bold text-sm flex items-center justify-center gap-2 cursor-wait border-none"
+                  disabled
+                >
+                  <Loader2 className="size-4 animate-spin" />
+                  <span>处理中 ({job?.progress ?? 0}%)</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    if (job) void handleStopJob(job.id)
+                  }}
+                  disabled={stoppingJob}
+                  className="h-11 px-4 rounded-xl border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/50 font-bold text-sm cursor-pointer flex items-center gap-1.5 shadow-sm"
+                  title="停止当前视频生成"
+                >
+                  {stoppingJob ? (
+                    <Loader2 className="size-4 animate-spin text-rose-500" />
+                  ) : (
+                    <Square className="size-3.5 fill-current text-rose-500" />
+                  )}
+                  <span>停止</span>
+                </Button>
+              </div>
+            ) : (
+              <Button
+                className="h-11 w-full rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold text-sm shadow-[0_4px_14px_0_rgba(37,99,235,0.35)] transition-all active:scale-[0.99] cursor-pointer flex items-center justify-center gap-2 border-none"
+                disabled={!selectedIds.length}
+                onClick={() => void startGenerate()}
+              >
                 <WandSparkles className="size-4" />
-              )}
-              {busy ? "处理中…" : "一键智能成片"}
-            </Button>
+                <span>一键智能成片</span>
+              </Button>
+            )}
           </div>
         </Card>
 
@@ -1479,24 +1537,64 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                 <p className="mt-2 text-xs text-[#9CA3AF]">
                   转写切句 → 9:16 拼接 → 字幕/BGM
                 </p>
-                <span className="mt-3 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-300 text-xs font-medium hover:bg-blue-100 transition-colors flex items-center gap-1.5 shadow-xs">
-                  <Terminal className="size-3" />
-                  <span>查看实时流水日志</span>
-                </span>
+                <div className="mt-4 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    onClick={() => setIsLogModalOpen(true)}
+                    className="px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-300 text-xs font-medium hover:bg-blue-100 transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <Terminal className="size-3" />
+                    <span>查看实时流水日志</span>
+                  </button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      if (job) void handleStopJob(job.id)
+                    }}
+                    disabled={stoppingJob}
+                    className="h-8 px-3 rounded-xl border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    title="停止当前视频生成"
+                  >
+                    {stoppingJob ? (
+                      <Loader2 className="size-3 animate-spin text-rose-500" />
+                    ) : (
+                      <Square className="size-2.5 fill-current text-rose-500" />
+                    )}
+                    <span>{stoppingJob ? "停止中…" : "停止处理"}</span>
+                  </Button>
+                </div>
               </div>
             ) : null}
 
             {showFailed ? (
               <div className="z-10 px-6 text-center flex flex-col items-center gap-3">
-                <div className="flex size-14 items-center justify-center rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-500 shadow-sm">
-                  <XCircle className="size-8" />
-                </div>
-                <div className="flex flex-col gap-1 max-w-md">
-                  <p className="text-base font-bold text-rose-600 dark:text-rose-400">成片生成失败</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed font-mono bg-slate-100 dark:bg-slate-800 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 max-h-24 overflow-y-auto">
-                    {job?.error || "生成过程中发生异常"}
-                  </p>
-                </div>
+                {job?.error === "canceled" || job?.message?.includes("停止") ? (
+                  <>
+                    <div className="flex size-14 items-center justify-center rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-500 shadow-sm">
+                      <Square className="size-6 fill-current" />
+                    </div>
+                    <div className="flex flex-col gap-1 max-w-md">
+                      <p className="text-base font-bold text-amber-600 dark:text-amber-400">视频生成已停止</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed font-mono bg-slate-100 dark:bg-slate-800 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 max-h-24 overflow-y-auto">
+                        已按您的指令手动停止视频处理。中间切片已缓存，支持随时从断点继续重试。
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex size-14 items-center justify-center rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-500 shadow-sm">
+                      <XCircle className="size-8" />
+                    </div>
+                    <div className="flex flex-col gap-1 max-w-md">
+                      <p className="text-base font-bold text-rose-600 dark:text-rose-400">成片生成失败</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed font-mono bg-slate-100 dark:bg-slate-800 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 max-h-24 overflow-y-auto">
+                        {job?.error || "生成过程中发生异常"}
+                      </p>
+                    </div>
+                  </>
+                )}
                 <div className="flex items-center gap-2 mt-2 flex-wrap justify-center">
                   {job && (
                     <Button
@@ -1518,8 +1616,8 @@ export function GeneratorView({ onGoLibrary, onGoHistory }: GeneratorViewProps) 
                       className="h-9 px-3.5 rounded-xl border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
                       onClick={() => setIsLogModalOpen(true)}
                     >
-                      <Terminal className="size-3.5 text-rose-500" />
-                      <span>查看失败日志</span>
+                      <Terminal className="size-3.5 text-slate-500" />
+                      <span>查看任务日志</span>
                     </Button>
                   )}
                 </div>

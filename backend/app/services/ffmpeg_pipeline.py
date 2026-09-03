@@ -10,7 +10,29 @@ from pathlib import Path
 
 from app.config import settings
 
+import contextvars
+from collections.abc import Callable
+from app.models import JobCancelledError
+
 logger = logging.getLogger(__name__)
+
+# 全局 ContextVar，用于跟踪当前线程处理中的任务 ID
+current_job_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("current_job_id", default=None)
+
+_on_process_start: Callable[[str, subprocess.Popen], None] | None = None
+_on_process_finish: Callable[[str, subprocess.Popen], None] | None = None
+_check_is_canceled: Callable[[str], bool] | None = None
+
+
+def set_process_lifecycle_hooks(
+    on_start: Callable[[str, subprocess.Popen], None] | None = None,
+    on_finish: Callable[[str, subprocess.Popen], None] | None = None,
+    is_canceled: Callable[[str], bool] | None = None,
+) -> None:
+    global _on_process_start, _on_process_finish, _check_is_canceled
+    _on_process_start = on_start
+    _on_process_finish = on_finish
+    _check_is_canceled = is_canceled
 
 
 def check_subtitles_filter(ffmpeg_path: str) -> bool:
@@ -161,14 +183,44 @@ def run_cmd(
     timeout: int | None = None,
     cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    job_id = current_job_id_var.get()
+    if job_id and _check_is_canceled and _check_is_canceled(job_id):
+        raise JobCancelledError(f"任务 {job_id} 已被手动停止")
+
+    proc = subprocess.Popen(
         args,
-        check=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout,
         cwd=cwd,
     )
+    if job_id and _on_process_start:
+        _on_process_start(job_id, proc)
+
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        proc.communicate()
+        raise subprocess.TimeoutExpired(proc.args, timeout, output=exc.output, stderr=exc.stderr) from exc
+    except Exception:
+        proc.kill()
+        try:
+            proc.communicate()
+        except Exception:
+            pass
+        raise
+    finally:
+        if job_id and _on_process_finish:
+            _on_process_finish(job_id, proc)
+
+    if job_id and _check_is_canceled and _check_is_canceled(job_id):
+        raise JobCancelledError(f"任务 {job_id} 已被手动停止")
+
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, args, output=stdout, stderr=stderr)
+
+    return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
 
 
 def probe(path: Path) -> MediaInfo:

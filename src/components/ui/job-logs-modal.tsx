@@ -9,6 +9,7 @@ import {
   ScrollText,
   Terminal,
   XCircle,
+  Square,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -19,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { fetchJobLogs, type JobLogsResult } from "@/lib/api"
+import { fetchJobLogs, stopJob, type JobLogsResult } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 interface JobLogsModalProps {
@@ -37,10 +38,33 @@ export function JobLogsModal({
 }: JobLogsModalProps) {
   const [data, setData] = useState<JobLogsResult | null>(null)
   const [loading, setLoading] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [copied, setCopied] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
   const logContainerRef = useRef<HTMLDivElement>(null)
   const pollTimerRef = useRef<number | null>(null)
+
+  const handleStop = async () => {
+    if (!jobId || stopping) return
+    setStopping(true)
+    try {
+      const res = await stopJob(jobId)
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: res.status,
+              message: res.message,
+            }
+          : null
+      )
+      void loadLogs(false)
+    } catch (err) {
+      console.error("停止任务失败:", err)
+    } finally {
+      setStopping(false)
+    }
+  }
 
   const loadLogs = useCallback(
     async (isInitial = false) => {
@@ -192,7 +216,9 @@ export function JobLogsModal({
                       : data.status === "succeeded"
                       ? "生成成功"
                       : data.status === "failed"
-                      ? "执行中断"
+                      ? data.message?.includes("停止")
+                        ? "已停止"
+                        : "执行中断"
                       : "排队中"}
                   </span>
                 )}
@@ -204,6 +230,23 @@ export function JobLogsModal({
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {isRunning && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleStop}
+                disabled={stopping}
+                className="h-8 px-2.5 text-xs bg-rose-500/20 hover:bg-rose-500/30 border-rose-500/40 text-rose-300 hover:text-rose-200 cursor-pointer flex items-center gap-1.5 rounded-lg transition-colors"
+                title="停止当前正在执行的任务"
+              >
+                {stopping ? (
+                  <Loader2 className="size-3.5 animate-spin text-rose-400" />
+                ) : (
+                  <Square className="size-3 fill-current text-rose-400" />
+                )}
+                <span>{stopping ? "停止中…" : "停止任务"}</span>
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"

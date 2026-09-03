@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { Download, FileText, Loader2, RefreshCw, Sparkles, Terminal, Timeline, Trash2, Wand2, Image as ImageIcon } from "lucide-react"
+import { Download, FileText, Loader2, RefreshCw, Sparkles, Square, Terminal, Timeline, Trash2, Wand2, Image as ImageIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ImagePreviewModal } from "@/components/ui/image-preview-modal"
@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { deleteJob, fetchJobs, generateJobCovers, retryJob, type Job } from "@/lib/api"
+import { deleteJob, fetchJobs, generateJobCovers, retryJob, stopJob, type Job } from "@/lib/api"
 import { cn, formatProcessingDuration } from "@/lib/utils"
 import { useMaterials } from "@/hooks/use-materials"
 import { useNotifications } from "@/hooks/use-notifications"
@@ -35,6 +35,14 @@ function statusBadge(job: Job) {
     )
   }
   if (job.status === "failed") {
+    if (job.error === "canceled" || job.message?.includes("停止")) {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-amber-950/60 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400 border border-amber-200/60 dark:border-amber-800/60">
+          <Square className="size-2.5 fill-current text-amber-500" />
+          已停止
+        </span>
+      )
+    }
     return (
       <span className="inline-flex items-center rounded-full bg-rose-50 dark:bg-rose-950/60 px-2.5 py-0.5 text-xs font-medium text-rose-700 dark:text-rose-400 border border-rose-200/60 dark:border-rose-800/60">
         失败
@@ -98,6 +106,30 @@ export function HistoryView() {
       })
     } finally {
       setRetryingId(null)
+    }
+  }
+
+  const [stoppingId, setStoppingId] = useState<string | null>(null)
+
+  const handleStop = async (jobId: string) => {
+    if (!jobId || stoppingId) return
+    setStoppingId(jobId)
+    try {
+      const updated = await stopJob(jobId)
+      setJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)))
+      notify({
+        title: "任务已停止",
+        message: `任务 ${jobId.slice(0, 8)} 已手动停止`,
+        type: "info",
+      })
+    } catch (err) {
+      notify({
+        title: "停止任务失败",
+        message: err instanceof Error ? err.message : "未知错误",
+        type: "error",
+      })
+    } finally {
+      setStoppingId(null)
     }
   }
 
@@ -390,6 +422,24 @@ export function HistoryView() {
                         <span className="text-xs text-slate-400 max-w-[140px] truncate" title={job.error || job.message}>
                           {job.error || job.message}
                         </span>
+                        {(job.status === "running" || job.status === "queued") && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void handleStop(job.id)}
+                            disabled={stoppingId === job.id}
+                            className="h-7 text-xs px-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 border-rose-200 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300 font-medium cursor-pointer gap-1 shadow-2xs"
+                            title="停止当前正在执行的任务"
+                          >
+                            {stoppingId === job.id ? (
+                              <Loader2 className="size-3 animate-spin text-rose-500" />
+                            ) : (
+                              <Square className="size-2.5 fill-current text-rose-500" />
+                            )}
+                            <span>{stoppingId === job.id ? "停止中…" : "停止"}</span>
+                          </Button>
+                        )}
                         {job.status === "failed" && (
                           <Button
                             type="button"

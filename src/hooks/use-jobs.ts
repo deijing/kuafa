@@ -10,6 +10,8 @@ export type JobsContextValue = {
   error: string | null
   refreshJobs: () => Promise<Job[]>
   registerJobs: (newJobs: Job[]) => void
+  stopJob: (jobId: string) => Promise<Job | null>
+  stopAllJobs: () => Promise<Job[]>
 }
 
 const JobsContext = createContext<JobsContextValue | null>(null)

@@ -12,6 +12,7 @@ import {
   Scissors,
   SlidersHorizontal,
   Sparkles,
+  Square,
   Terminal,
   Trash2,
   Upload,
@@ -52,6 +53,8 @@ import {
   getMaterialVideoUrl,
   retryJob,
   retryJobsBatch,
+  stopJob,
+  stopBatchJobs,
   uploadBgm,
   type BgmItem,
   type CoverStyle,
@@ -835,6 +838,62 @@ export function MaterialCutView({ onGoLibrary }: MaterialCutViewProps) {
       })
     } finally {
       setRetryingBatch(false)
+    }
+  }
+
+  const [stoppingJobId, setStoppingJobId] = useState<string | null>(null)
+  const [stoppingBatch, setStoppingBatch] = useState(false)
+
+  // 停止单条生成任务
+  async function handleStopJob(jobId: string) {
+    if (stoppingJobId === jobId) return
+    setStoppingJobId(jobId)
+    try {
+      const updated = await stopJob(jobId)
+      setJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)))
+      setAllHistoryJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)))
+      notify({
+        title: "任务已停止",
+        message: `成片「${updated.headline || jobId.slice(0, 8)}」已手动停止`,
+        type: "info",
+      })
+    } catch (err) {
+      notify({
+        title: "停止任务失败",
+        message: err instanceof Error ? err.message : "未知错误",
+        type: "error",
+      })
+    } finally {
+      setStoppingJobId(null)
+    }
+  }
+
+  // 批量停止正在处理的任务
+  async function handleStopBatch() {
+    const activeIds = displayedJobs
+      .filter((j) => j.status === "queued" || j.status === "running")
+      .map((j) => j.id)
+    if (!activeIds.length || stoppingBatch) return
+    setStoppingBatch(true)
+    try {
+      const stopped = await stopBatchJobs(activeIds)
+      const stoppedMap = new Map(stopped.map((j) => [j.id, j]))
+      setJobs((prev) => prev.map((j) => stoppedMap.get(j.id) || j))
+      setAllHistoryJobs((prev) => prev.map((j) => stoppedMap.get(j.id) || j))
+      setBusy(false)
+      notify({
+        title: "已停止批量任务",
+        message: `已停止 ${stopped.length} 条正在处理的混剪任务`,
+        type: "info",
+      })
+    } catch (err) {
+      notify({
+        title: "停止批量任务失败",
+        message: err instanceof Error ? err.message : "未知错误",
+        type: "error",
+      })
+    } finally {
+      setStoppingBatch(false)
     }
   }
 
@@ -1754,6 +1813,28 @@ export function MaterialCutView({ onGoLibrary }: MaterialCutViewProps) {
               </div>
 
               <div className="flex items-center gap-2">
+                {displayedJobs.some((j) => j.status === "queued" || j.status === "running") && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs font-semibold rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-300 border-rose-200 dark:border-rose-900 hover:bg-rose-100 cursor-pointer shadow-2xs"
+                    onClick={handleStopBatch}
+                    disabled={stoppingBatch}
+                    title="停止所有正在处理的视频"
+                  >
+                    {stoppingBatch ? (
+                      <Loader2 className="size-3.5 mr-1 animate-spin text-rose-500" />
+                    ) : (
+                      <Square className="size-3 mr-1 fill-current text-rose-500" />
+                    )}
+                    <span>
+                      {stoppingBatch
+                        ? "正在停止…"
+                        : `全部停止 (${displayedJobs.filter((j) => j.status === "queued" || j.status === "running").length})`}
+                    </span>
+                  </Button>
+                )}
+
                 {displayedJobs.some((j) => j.status === "failed") && (
                   <Button
                     size="sm"
@@ -1809,6 +1890,25 @@ export function MaterialCutView({ onGoLibrary }: MaterialCutViewProps) {
                           </span>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
+                          {isRunning && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                void handleStopJob(job.id)
+                              }}
+                              disabled={stoppingJobId === job.id}
+                              className="px-1.5 py-0.5 rounded-lg text-rose-500 hover:text-white hover:bg-rose-600 border border-rose-200 dark:border-rose-800 transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-medium shadow-2xs"
+                              title="停止当前视频生成"
+                            >
+                              {stoppingJobId === job.id ? (
+                                <Loader2 className="size-2.5 animate-spin" />
+                              ) : (
+                                <Square className="size-2 fill-current" />
+                              )}
+                              <span>停止</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() =>
@@ -1836,6 +1936,8 @@ export function MaterialCutView({ onGoLibrary }: MaterialCutViewProps) {
                                 ? "bg-emerald-50 text-emerald-600 border border-emerald-200/60"
                                 : isRunning
                                 ? "bg-blue-50 text-blue-600 border border-blue-200/60 animate-pulse"
+                                : job.error === "canceled" || job.message?.includes("停止")
+                                ? "bg-amber-50 text-amber-600 border border-amber-200/60"
                                 : "bg-rose-50 text-rose-600 border border-rose-200/60"
                             )}
                             title="点击查看执行流水"
@@ -1844,6 +1946,8 @@ export function MaterialCutView({ onGoLibrary }: MaterialCutViewProps) {
                               ? "生成成功"
                               : isRunning
                               ? `${job.progress}% 处理中`
+                              : job.error === "canceled" || job.message?.includes("停止")
+                              ? "已停止"
                               : "失败"}
                           </span>
                         </div>

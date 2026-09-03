@@ -664,3 +664,23 @@ export function retryJobsBatch(jobIds: string[]) {
   })
 }
 
+export function stopJob(jobId: string) {
+  return request<Job>(`/api/jobs/${encodeURIComponent(jobId)}/stop`, {
+    method: "POST",
+  })
+}
+
+export function stopBatchJobs(jobIds: string[]) {
+  return request<Job[]>(`/api/jobs/stop-batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_ids: jobIds }),
+  })
+}
+
+export function stopAllJobs() {
+  return request<Job[]>(`/api/jobs/stop-all`, {
+    method: "POST",
+  })
+}
+

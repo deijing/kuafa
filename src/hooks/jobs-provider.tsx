@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react"
-import { fetchJobs, type Job } from "@/lib/api"
+import { fetchJobs, stopJob as stopJobApi, stopAllJobs as stopAllJobsApi, type Job } from "@/lib/api"
 import { useNotifications } from "@/hooks/use-notifications"
 import { JobsContext } from "@/hooks/use-jobs"
 
@@ -75,13 +75,21 @@ export function JobsProvider({ children }: { children: ReactNode }) {
               sendDesktop: true,
             })
           } else if (found.status === "failed") {
-            notify({
-              title: "⚠️ 视频生成失败",
-              message: `任务「${found.headline || found.id.slice(0, 8)}」生成失败：${found.error || "遇到未知错误"}`,
-              type: "error",
-              playSound: true,
-              sendDesktop: true,
-            })
+            if (found.error === "canceled" || found.message?.includes("停止")) {
+              notify({
+                title: "任务已停止",
+                message: `任务「${found.headline || found.id.slice(0, 8)}」已手动停止。`,
+                type: "info",
+              })
+            } else {
+              notify({
+                title: "⚠️ 视频生成失败",
+                message: `任务「${found.headline || found.id.slice(0, 8)}」生成失败：${found.error || "遇到未知错误"}`,
+                type: "error",
+                playSound: true,
+                sendDesktop: true,
+              })
+            }
           }
         }
       }
@@ -89,6 +97,40 @@ export function JobsProvider({ children }: { children: ReactNode }) {
 
     prevActiveIdsRef.current = currentActiveIds
   }, [jobs, activeJobs, notify])
+
+  const stopJob = useCallback(
+    async (jobId: string) => {
+      try {
+        const updated = await stopJobApi(jobId)
+        setJobs((prev) => prev.map((j) => (j.id === jobId ? updated : j)))
+        return updated
+      } catch (err) {
+        notify({
+          title: "停止任务失败",
+          message: err instanceof Error ? err.message : "未知错误",
+          type: "error",
+        })
+        return null
+      }
+    },
+    [notify]
+  )
+
+  const stopAllJobs = useCallback(async () => {
+    try {
+      const stopped = await stopAllJobsApi()
+      const stoppedMap = new Map(stopped.map((j) => [j.id, j]))
+      setJobs((prev) => prev.map((j) => stoppedMap.get(j.id) ?? j))
+      return stopped
+    } catch (err) {
+      notify({
+        title: "停止全部任务失败",
+        message: err instanceof Error ? err.message : "未知错误",
+        type: "error",
+      })
+      return []
+    }
+  }, [notify])
 
   // 后台持续轮询
   useEffect(() => {
@@ -131,6 +173,8 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       error,
       refreshJobs,
       registerJobs,
+      stopJob,
+      stopAllJobs,
     }),
     [
       jobs,
@@ -141,6 +185,8 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       error,
       refreshJobs,
       registerJobs,
+      stopJob,
+      stopAllJobs,
     ]
   )
 

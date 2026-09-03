@@ -41,6 +41,7 @@ from app.models import (
     JobCoverRequest,
     JobExportZipRequest,
     JobRetryBatchRequest,
+    JobStopBatchRequest,
     EnvCheckItem,
     EnvCheckResult,
     GenerateRequest,
@@ -107,7 +108,7 @@ seed_demo_group_from_case()
 ensure_ffmpeg_configured()
 jobs.fail_interrupted_jobs()
 
-app = FastAPI(title="快发 API", version="1.9.2")
+app = FastAPI(title="快发 API", version="1.9.3")
 
 app.add_middleware(
     CORSMiddleware,
@@ -603,6 +604,34 @@ def delete_job(job_id: str) -> JobOut:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/jobs/{job_id}/stop", response_model=JobOut)
+@app.post("/api/jobs/{job_id}/cancel", response_model=JobOut)
+def stop_job(job_id: str) -> JobOut:
+    """停止正在生成或排队中的任务，立即杀死正在执行的 FFmpeg 进程。"""
+    try:
+        return jobs.cancel(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"停止任务失败: {exc}") from exc
+
+
+@app.post("/api/jobs/stop-batch", response_model=list[JobOut])
+@app.post("/api/jobs/cancel-batch", response_model=list[JobOut])
+def stop_batch_jobs(req: JobStopBatchRequest) -> list[JobOut]:
+    """批量停止指定的成片任务。"""
+    return jobs.cancel_batch(req.job_ids)
+
+
+@app.post("/api/jobs/stop-all", response_model=list[JobOut])
+@app.post("/api/jobs/cancel-all", response_model=list[JobOut])
+def stop_all_jobs() -> list[JobOut]:
+    """停止当前全部排队或处理中的成片任务。"""
+    return jobs.cancel_all_active()
 
 
 @app.post("/api/jobs/{job_id}/retry", response_model=JobOut)

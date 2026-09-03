@@ -364,8 +364,17 @@ class JobOut(BaseModel):
     logs: list[JobLogEntry] = Field(default_factory=list)
 
 
+class JobCancelledError(RuntimeError):
+    """成片任务已被用户手动停止"""
+    pass
+
+
 class JobRetryBatchRequest(BaseModel):
     job_ids: list[str] = Field(min_length=1)
+
+
+class JobStopBatchRequest(BaseModel):
+    job_ids: list[str] = Field(default_factory=list)
 
 
 class BatchGenerateOut(BaseModel):

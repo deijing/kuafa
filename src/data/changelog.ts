@@ -15,16 +15,46 @@ export type ChangelogItem = {
   }[]
 }
 
-export const APP_VERSION = "v1.9.2"
-export const APP_BUILD_DATE = "2026-09-02"
+export const APP_VERSION = "v1.9.3"
+export const APP_BUILD_DATE = "2026-09-03"
 
 export const CHANGELOG_DATA: ChangelogItem[] = [
+  {
+    version: "v1.9.3",
+    date: "2026-09-03",
+    title: "视频生成进程主动停止与实时熔断控制系统",
+    tag: "🚀 重点迭代",
+    isLatest: true,
+    highlights: [
+      "🛑 全局主动停止与进程熔断：支持随时中断正在处理的单条/批量生成任务，底层 FFmpeg/FFprobe 子进程毫秒级释放",
+      "⚡ 并发排队无感退让：排队任务收到停止指令后即刻退出，杜绝占用全局渲染闸门与信号量泄漏",
+      "🔄 状态与断点保留：停止后标记为清晰的「已停止」徽章，中间切片与 ASR 缓存完整保留，随时支持一键断点重试",
+      "🖥️ 全场景界面停止按钮：顶部全局横幅、单片生成视图、批量成片卡片、混剪列表与实时日志弹窗全链路集成停止控制",
+    ],
+    details: [
+      {
+        type: "feature",
+        text: "全局顶部通知横幅新增「全部停止」按钮，支持在任意视图跨页面一键中止所有正在渲染中的任务。",
+      },
+      {
+        type: "feature",
+        text: "批量成片视图与混剪视图新增「全部停止 (N)」批量控制及每张卡片右上角独立的「停止」按钮。",
+      },
+      {
+        type: "feature",
+        text: "单片生成视图在底部操作栏及全屏处理遮罩中心集成停止控制，停止后展示醒目的已停止状态并提供断点重试入口。",
+      },
+      {
+        type: "perf",
+        text: "底层采用 ContextVar 上下文追踪与 Popen.kill 强杀机制，确保显存、CPU 与磁盘 IO 立即释放归还操作系统。",
+      },
+    ],
+  },
   {
     version: "v1.9.2",
     date: "2026-09-02",
     title: "通用声学与语义自愈兜底引擎 · 彻底杜绝句末掐断与吞字",
     tag: "⚡ 算法优化",
-    isLatest: true,
     highlights: [
       "🛡️ 通用边界自愈引擎 (heal_and_complete_block)：自动向原片后方音轨追溯拼接未完成的后半句话，确保整句语义 100% 完整闭合",
       "✂️ 安全闭环回退保护：若原片在半截话处物理结束，自动回退修剪至前一个完整句末，绝不留半句话进入成片",
